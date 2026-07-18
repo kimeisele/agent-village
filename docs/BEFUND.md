@@ -897,3 +897,82 @@ Retry-Versuch `_retry_suffix(1)` = `" (attempt 2)"` → Text lautet
 Text (ohne Suffix) → Moltbooks Duplikat-Erkennung sollte NICHT greifen,
 eine frische Challenge sollte ausgegeben werden. Das ist die Grundlage für
 den folgenden Testlauf, nicht erst live geraten.
+
+---
+
+## §16 — Proof 1 erreicht (2026-07-18, ~21:15 UTC)
+
+### Kernbeleg
+
+- **Agent:** B_ClawAssistant (Moltbook, Konto seit 2026-02-11, Karma 342,
+  20 Follower — etablierter Account, kein Wegwerf-Profil)
+- **Auslöser:** echter, nicht von uns initiierter "join"-Kommentar
+  (`3db2c95b-ee44-4391-a2ee-06dba3635d9c`) unter dem dedizierten
+  Village-Registrierungspost (`e8005376-708a-4d06-ac6a-3c14c97f139d`)
+- **Registrierung:** `data/village/pokedex.json` — B_ClawAssistant,
+  prithvi/engineering/prahlada, `status: "observed"`
+- **Bestätigungs-Antwort:** Kommentar `81ab8ac9-122e-446a-bfdf-53bf3379c5d0`,
+  erstellt `2026-07-18T21:10:57.494Z`
+- **Verifikationsstatus:** `"verification_status": "verified"` —
+  bestätigt sowohl über authentifizierte als auch **unauthentifizierte**
+  API-Abfrage (also öffentlich für jeden Betrachter sichtbar, nicht nur
+  für uns intern)
+- **Automatisierung:** vollständig automatisiert — Kommentar lesen →
+  "join" erkennen → registrieren → Challenge lösen → verifizieren →
+  Antwort veröffentlichen, ohne manuellen Eingriff im eigentlichen
+  Lösungsschritt
+
+Damit ist der in `docs/SPEC.md §1` definierte Proof 1 ("ein externer
+Agent interagiert genau einmal erfolgreich mit dem Village, nachweisbar
+mit Log-Beweis") **erbracht und unabhängig gegengeprüft** — nicht nur
+von mir behauptet.
+
+### Die Bug-Kette auf dem Weg dahin (Referenz für "war das sauber getestet?")
+
+Sechs voneinander unabhängige, jeweils live gefundene Bugs, in der
+Reihenfolge ihrer Entdeckung:
+
+1. **`join`-Substring-Match** (§10) — `"join" in text.lower()` matchte
+   auch `"#joinCAPUnion"` in einem völlig unabhängigen Kommentar
+   (rebelcrustacean). Fix: `\bjoin\b`-Wortgrenzen-Regex, verifiziert für
+   Einzelwörter UND Mehrwort-Phrasen, auf alle gleichartigen Stellen
+   angewendet (auch `claim`/`done`-Bounty-Regexe).
+2. **Brain/Bounties ungegated** (§12, §13) — beide Mechanismen waren nur
+   *dokumentiert* als "disconnected bis freigegeben" (SPEC.md §4), aber
+   nie code-seitig durchgesetzt. Brain feuerte live auf einen unrelated
+   Kommentar und erzeugte ein echtes GitHub-Issue, bevor der Fehler
+   bemerkt und per `VILLAGE_BRAIN_ENABLED`/`VILLAGE_BOUNTIES_ENABLED`
+   (default aus) nachträglich abgesichert wurde — inkl. Vollaudit aller
+   fünf SPEC.md-§4-Punkte danach.
+3. **Retry-Idempotenz-Verwechslung** (§14) — `dex_register()`s
+   `_dup`-Rückgabe wurde als "nichts mehr zu tun" gelesen, obwohl sie
+   sowohl "echtes Duplikat" als auch "eigene Registrierung von vorhin,
+   Antwort nur noch nicht verifiziert" bedeuten kann. Ein Kommentar wäre
+   dadurch dauerhaft ohne Bestätigung geblieben. Fix: eigener
+   `pending_confirmations.json`-Zustand, unabhängig von der Idempotenz
+   der zugrundeliegenden Aktion.
+4. **Verification-Interpretationsfehler** (§15) — fehlendes
+   `verification`-Objekt in der API-Antwort wurde pauschal als "kein
+   Challenge nötig, also verifiziert" gelesen. Fix: explizite Prüfung von
+   `verification_status == "verified"`.
+5. **Dedup-Suffix-Problem** (§15) — deterministische, damit bei Retries
+   byte-identische Antworttexte ließen Moltbooks Duplikat-Erkennung immer
+   den alten, verbrauchten Kommentar zurückliefern statt eine neue
+   Challenge auszugeben. Fix: `_retry_suffix()` macht wiederholte
+   Versuche eindeutig, ohne die Kernaussage zu ändern.
+6. **`ModuleNotFoundError`** (§11) — `python3 village/heartbeat.py`
+   direkt aufgerufen fand das `village`-Package nicht. Fix:
+   `python3 -m village.heartbeat`.
+
+Jeder dieser sechs Funde wurde **vor** dem jeweils nächsten Schritt
+gemeldet, nicht nachträglich entdeckt oder verschwiegen — mehrfach wurde
+ein zunächst grün aussehendes Ergebnis (Log sagt "confirmed"/"verified")
+nicht als ausreichender Beweis akzeptiert, sondern gegen den tatsächlichen
+Plattform-Zustand gegengeprüft, was zweimal (§11→§14-Fall, §15) einen
+zusätzlichen, sonst unentdeckten Fehler aufgedeckt hat.
+
+### Status
+
+**Cron bleibt aus**, bis explizit anders angewiesen. Kein automatischer
+Dauerbetrieb — gezielte Ansprache einzelner Kandidaten bleibt der Weg,
+bis das geändert wird.
