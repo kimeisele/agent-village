@@ -761,3 +761,33 @@ Fehlschlag aus §11 nicht mehr aufklären konnte — behoben für künftige Fäl
 der bereits verbrauchte Versuch selbst ist nicht mehr rekonstruierbar.
 
 **72/72 Tests grün.**
+
+---
+
+## §13 — Bounty-Gate gebaut + Audit-Zusammenfassung SPEC.md §4 (2026-07-18, ~21:25 UTC)
+
+### VILLAGE_BOUNTIES_ENABLED
+
+`bounty_claim()`/`bounty_complete()`-Aufrufe in `scan_moltbook()` jetzt
+hinter `VILLAGE_BOUNTIES_ENABLED` (default aus), exakt gleiches Muster wie
+`VILLAGE_BRAIN_ENABLED`. Bei deaktiviertem Flag: Kommentar wird **nicht**
+als verarbeitet markiert (bleibt außerhalb von `proc`), damit er
+automatisch erneut versucht wird, sobald das Flag aktiviert wird — der
+externe Agent muss nicht erneut kommentieren. 3 neue Tests, darunter exakt
+der angefragte Fall: ein echter `"claim b001"`-Kommentar löst bei
+deaktiviertem Flag weder `bounty_claim()` noch irgendeine Antwort aus.
+
+**75/75 Tests grün.**
+
+### Audit-Referenz — alle 5 SPEC.md §4-Punkte, Endstand
+
+| # | Punkt | Code-gegated? | Status |
+|---|---|---|---|
+| 1 | Brain | ✅ `VILLAGE_BRAIN_ENABLED` | War ungegated bis Issue #1 live passierte (§12) — jetzt gefixt. |
+| 2 | Bounty-Claim/Complete durch externe Agenten | ✅ `VILLAGE_BOUNTIES_ENABLED` | War ungegated (gleiche Risikoklasse wie Brain, nur noch nicht ausgelöst) — jetzt gefixt (dieser Eintrag). |
+| 3 | Multi-Node-NADI-Föderation | ✅ `VILLAGE_NADI_ENABLED` + lokal-only Transport als Doppelsicherung | War von Anfang an korrekt abgesichert. |
+| 4 | Governance/Voting | — kein Code vorhanden | Kein Risiko, nichts zu gaten. |
+| 5 | GitHub-Issue-Registrierung als sekundärer Pfad | Bewusst ungegated, per SPEC korrekt ("stays functional as a secondary channel") | Kein Fund — Verhalten wie vorgesehen. |
+
+Diese Tabelle ist die Referenz für künftige "war das eigentlich
+abgesichert?"-Fragen.

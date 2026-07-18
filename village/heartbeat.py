@@ -403,6 +403,15 @@ def scan_moltbook() -> int:
         # --- Bounty claim ---
         m = re.search(r"\bclaim\s+(b\d+)", text, re.I)
         if m:
+            if os.environ.get("VILLAGE_BOUNTIES_ENABLED") != "1":
+                # Gated (docs/BEFUND.md §13): same risk class as Brain was
+                # before it was gated -- exercised by real external agents,
+                # explicitly out of scope for v1 (SPEC.md §4). Left OUT of
+                # `proc` on purpose, not marked done, so this comment is
+                # retried automatically once the flag is turned on later —
+                # no need for the agent to comment again.
+                print(f"  [mb] bounty claim disabled pending approval — skipping (retries once VILLAGE_BOUNTIES_ENABLED=1): {cid}")
+                continue
             bid = m.group(1)
             result = bounty_claim(bid, sender)
             if result:
@@ -432,6 +441,9 @@ def scan_moltbook() -> int:
         # --- Bounty done ---
         m = re.search(r"\bdone\s+(b\d+)", text, re.I)
         if m:
+            if os.environ.get("VILLAGE_BOUNTIES_ENABLED") != "1":
+                print(f"  [mb] bounty done disabled pending approval — skipping (retries once VILLAGE_BOUNTIES_ENABLED=1): {cid}")
+                continue
             bid = m.group(1)
             result = bounty_complete(bid)
             if result:
