@@ -24,6 +24,15 @@ STATE = DIR / "state.json"
 PROC_GH = DIR / "processed_issues.json"
 PROC_MB = DIR / "processed_comments.json"
 CHALLENGE_STATE = DIR / "challenge_failures.json"
+# Tracks comments where the underlying action (dex_register/bounty_claim/
+# bounty_complete) already succeeded, but the confirmation reply has not
+# yet been verified. Deliberately separate from PROC_MB/proc — see
+# docs/BEFUND.md §14. Do NOT use dex_register()'s idempotent "_dup" return
+# (or bounty_claim() returning None because status is no longer "open") to
+# decide whether a comment still needs a confirmation retry: both of those
+# are true for "already fully handled" AND for "action succeeded, reply
+# still pending" alike, which is exactly the bug this file exists to avoid.
+PENDING_MB = DIR / "pending_confirmations.json"
 
 GH = os.environ.get("GITHUB_TOKEN", "") or os.environ.get("GH_TOKEN", "")
 MB = ""
@@ -349,6 +358,10 @@ def scan_github() -> int:
 
 
 # ── Moltbook Scanner ─────────────────────────────────────
+def _empty_pending() -> dict:
+    return {"registration": {}, "bounty_claim": {}, "bounty_reject": {}, "bounty_done": {}}
+
+
 def scan_moltbook() -> int:
     if not MB:
         print("  [mb] no key")
@@ -357,25 +370,97 @@ def scan_moltbook() -> int:
         print("  [mb] MB_REG_POST not configured — skipping (see docs/SPEC.md §1)")
         return 0
     proc = set(_load(PROC_MB).get("comment_ids", []))
+    pending = _load(PENDING_MB) or _empty_pending()
+    for kind in ("registration", "bounty_claim", "bounty_reject", "bounty_done"):
+        pending.setdefault(kind, {})
+
+    c = 0
+
+    # ── Retry pass: comments whose underlying action already succeeded
+    # last cycle, but whose confirmation reply was never verified. Uses
+    # the data captured at first-attempt time (docs/BEFUND.md §14) —
+    # NOT dex_register()/bounty_claim() again, since both are idempotent
+    # and would misreport "already done" for a comment that is actually
+    # still awaiting its first successful confirmation.
+    for cid, info in list(pending["registration"].items()):
+        name = info["name"]
+        ident = dex_register(name)  # idempotent; just need element/zone/guardian again
+        result = _post_comment_verified(
+            REG_POST,
+            f"🦞 **{name}** registered! {ident['element']}/{ident['zone']}/{ident['guardian']}. Pop: {_load(POKEDEX).get('total',0)} | Open bounties: {len(bounty_list())}",
+            parent_id=cid,
+        )
+        if result.get("verified"):
+            proc.add(cid)
+            del pending["registration"][cid]
+            c += 1
+            print(f"  [mb] reg {name} confirmed on retry")
+        else:
+            print(f"  [mb] reg {name} still not verified ({result.get('reason')}), retrying next cycle")
+
+    for cid, info in list(pending["bounty_claim"].items()):
+        result = _post_comment_verified(
+            REG_POST,
+            f"🦞 **{info['sender']}** claimed bounty `{info['bid']}`: {info['title']}",
+            parent_id=cid,
+        )
+        if result.get("verified"):
+            proc.add(cid)
+            del pending["bounty_claim"][cid]
+            c += 1
+            print(f"  [mb] bounty {info['bid']} claim confirmed on retry")
+        else:
+            print(f"  [mb] bounty {info['bid']} claim still not verified ({result.get('reason')}), retrying next cycle")
+
+    for cid, info in list(pending["bounty_reject"].items()):
+        result = _post_comment_verified(
+            REG_POST,
+            f"❌ Bounty `{info['bid']}` not available (already claimed or not found).",
+            parent_id=cid,
+        )
+        if result.get("verified"):
+            proc.add(cid)
+            del pending["bounty_reject"][cid]
+        else:
+            print(f"  [mb] bounty {info['bid']} rejection still not verified ({result.get('reason')}), retrying next cycle")
+
+    for cid, info in list(pending["bounty_done"].items()):
+        result = _post_comment_verified(
+            REG_POST,
+            f"✅ Bounty `{info['bid']}` complete: {info['title']} — claimed by {info['claimed_by']}",
+            parent_id=cid,
+        )
+        if result.get("verified"):
+            proc.add(cid)
+            del pending["bounty_done"][cid]
+            c += 1
+            print(f"  [mb] bounty {info['bid']} done confirmed on retry")
+        else:
+            print(f"  [mb] bounty {info['bid']} done still not verified ({result.get('reason')}), retrying next cycle")
+
     resp = _mb(f"posts/{REG_POST}/comments?sort=new&limit=50")
     if not resp or not resp.get("success"):
-        return 0
-    c = 0
+        _save(PROC_MB, {"comment_ids": list(proc)})
+        _save(PENDING_MB, pending)
+        return c
+
+    already_pending = set(pending["registration"]) | set(pending["bounty_claim"]) | set(pending["bounty_reject"]) | set(pending["bounty_done"])
+
     for cmt in resp.get("comments", []):
         cid = cmt.get("id", "")
-        if cid in proc:
+        if cid in proc or cid in already_pending:
             continue
         text = cmt.get("content", "")
         author = cmt.get("author", {})
         sender = author.get("name", "?")
 
-        # Retry policy (Option A, docs/BEFUND.md §8/§9): cid is only added
-        # to `proc` (marked done, never seen again) once a verify-gated
-        # reply is confirmed verified, or there was nothing to verify in
-        # the first place. If the reply's challenge fails/is skipped, cid
-        # is left OUT of proc so this same comment is retried next cycle.
-        # dex_register()/bounty_claim()/bounty_complete() are idempotent
-        # (dup checks), so re-running them on retry is safe.
+        # First-encounter policy (docs/BEFUND.md §14): if the action
+        # (dex_register/bounty_claim/bounty_complete) succeeds but the
+        # confirmation reply is not verified, the comment goes into
+        # `pending`, NOT back to being re-scanned as "new" next cycle —
+        # the retry pass above handles it from here on, using the
+        # already-captured info dict, never re-deciding based on
+        # dex_register()'s/bounty_claim()'s idempotent return value.
 
         # --- Registration intent ---
         if _kw_match(text, "join", "register", "sign up", "add me"):
@@ -383,8 +468,9 @@ def scan_moltbook() -> int:
             name = m.group(1).strip() if m else sender
             ident = dex_register(name)
             if ident.get("_dup"):
-                # Already registered under this name — nothing left to
-                # retry, no reply was ever attempted for this comment.
+                # Genuinely already registered under this name by a PRIOR,
+                # different comment — nothing to retry for THIS cid, no
+                # reply was ever attempted for it.
                 proc.add(cid)
                 continue
             result = _post_comment_verified(
@@ -397,6 +483,7 @@ def scan_moltbook() -> int:
                 c += 1
                 print(f"  [mb] reg {name} via {sender}")
             else:
+                pending["registration"][cid] = {"name": name}
                 print(f"  [mb] reg {name} via {sender} — reply not verified ({result.get('reason')}), retrying next cycle")
             continue
 
@@ -425,6 +512,7 @@ def scan_moltbook() -> int:
                     c += 1
                     print(f"  [mb] bounty {bid} claimed by {sender}")
                 else:
+                    pending["bounty_claim"][cid] = {"bid": bid, "sender": sender, "title": result["title"]}
                     print(f"  [mb] bounty {bid} claim reply not verified ({reply.get('reason')}), retrying next cycle")
             else:
                 reply = _post_comment_verified(
@@ -435,6 +523,7 @@ def scan_moltbook() -> int:
                 if reply.get("verified"):
                     proc.add(cid)
                 else:
+                    pending["bounty_reject"][cid] = {"bid": bid}
                     print(f"  [mb] bounty {bid} rejection reply not verified ({reply.get('reason')}), retrying next cycle")
             continue
 
@@ -457,6 +546,7 @@ def scan_moltbook() -> int:
                     c += 1
                     print(f"  [mb] bounty {bid} done by {sender}")
                 else:
+                    pending["bounty_done"][cid] = {"bid": bid, "title": result["title"], "claimed_by": result["claimed_by"]}
                     print(f"  [mb] bounty {bid} done reply not verified ({reply.get('reason')}), retrying next cycle")
             else:
                 # bounty_complete() found nothing to complete — no reply
@@ -469,6 +559,7 @@ def scan_moltbook() -> int:
         proc.add(cid)
 
     _save(PROC_MB, {"comment_ids": list(proc)})
+    _save(PENDING_MB, pending)
     return c
 
 

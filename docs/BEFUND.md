@@ -791,3 +791,49 @@ deaktiviertem Flag weder `bounty_claim()` noch irgendeine Antwort aus.
 
 Diese Tabelle ist die Referenz für künftige "war das eigentlich
 abgesichert?"-Fragen.
+
+---
+
+## §14 — Retry-Zustand von Idempotenz entkoppelt (2026-07-18, ~21:40 UTC)
+
+### Der Bug (bestätigt live in Run 29660128767)
+
+`ident.get("_dup")` (von `dex_register()`) wurde als Signal "hier gibt's
+nichts mehr zu tun" behandelt. Das ist korrekt für einen **fremden**
+Kommentar mit kollidierendem Namen, aber **falsch** für den Retry-Fall:
+wenn die Registrierung selbst (idempotent, sofort erfolgreich) schon lief,
+aber die Bestätigungs-Antwort nie verifiziert wurde, meldet
+`dex_register()` beim nächsten Versuch ebenfalls `_dup: True` — und der
+Code brach den Retry lautlos ab, ohne je eine verifizierte Antwort zu
+versuchen. Strukturell identisches Problem bei `bounty_claim()` (liefert
+`None` sobald der Status nicht mehr `"open"` ist — nicht unterscheidbar
+von "nie offen gewesen").
+
+### Der Fix
+
+Neue Datei `data/village/pending_confirmations.json`, unabhängig von
+`processed_comments.json`. Vier Kategorien: `registration`,
+`bounty_claim`, `bounty_reject`, `bounty_done`. Bei einer fehlgeschlagenen
+Verifizierung wird die zum Antworten nötige Information (Name / Bounty-ID
++ Sender + Titel / etc.) dort **einmalig zum Zeitpunkt des ersten
+Versuchs** gespeichert — nicht durch erneuten Aufruf von
+`dex_register()`/`bounty_claim()` rekonstruiert, weil deren Rückgabewert
+beim Retry nicht mehr zwischen "nie versucht" und "schon erfolgreich,
+nur Antwort fehlt" unterscheiden kann.
+
+Jeder Heartbeat-Lauf verarbeitet zuerst alle `pending`-Einträge (reiner
+Retry der Antwort, keine erneute Zustandsänderung), danach erst neue
+Kommentare. Ein Kommentar gilt endgültig als erledigt (`proc.add(cid)`),
+sobald die Antwort nachweislich verifiziert ist — nicht früher.
+
+### Test
+
+`tests/test_pending_confirmation.py` — exakt der beobachtete Fall:
+Lauf 1 registriert erfolgreich, Verify schlägt fehl → `pending`. Lauf 2:
+`dex_register()` liefert `_dup: True`, Code muss trotzdem einen neuen
+Verify-Versuch unternehmen (nicht überspringen) → grün. Zweiter Test
+für Bounty-Claim-Retry, verifiziert dass `bounty_claim()` beim Retry
+**nicht** erneut aufgerufen wird (würde `None` liefern und fälschlich
+als Ablehnung durchgehen).
+
+**77/77 Tests grün.**
