@@ -720,3 +720,44 @@ Lokaler Testlauf zur Verifikation hat testweise `data/village/state.json`
 verändert und `challenge_failures.json` neu erzeugt — beides vor dem Commit
 zurückgesetzt/gelöscht, damit der folgende echte Actions-Lauf einen sauberen
 Diff zeigt.
+
+---
+
+## §12 — Brain-Gate, Logging-Fix, Issue #1 geschlossen (2026-07-18, ~21:15 UTC)
+
+### Issue #1
+
+Kommentiert (ehrlich, kein Vorwurf an rebelcrustacean, erklärt den technischen
+Grund) und **geschlossen, nicht gelöscht**:
+https://github.com/kimeisele/agent-village/issues/1#issuecomment-5012797650
+
+### VILLAGE_BRAIN_ENABLED
+
+`scan_brain()` prüft jetzt `os.environ.get("VILLAGE_BRAIN_ENABLED") != "1"`
+ganz am Anfang, exakt analog zu `VILLAGE_NADI_ENABLED`. Default aus, kein
+Workflow-Change nötig (Variable einfach nicht setzen). 3 neue Tests:
+default aus (kein `_mb`-Aufruf überhaupt), explizit aktiviert (fährt fort),
+falscher Wert wie `"true"` aktiviert NICHT (nur exakt `"1"`).
+
+**Nebenbefund:** Für `VILLAGE_NADI_ENABLED` existiert **kein** eigener
+Test — das Gate sitzt inline in `heartbeat()`, nicht in einer eigenen
+Funktion wie bei Brain, dadurch schwerer isoliert zu testen. Nicht
+nachgezogen (nicht angefragt), aber als Lücke vermerkt.
+
+### Logging-Fix
+
+`village/moltbook_captcha.py::solve_and_verify()`: `challenge_text[:60]`
+→ voller Text bei Erfolg und Fehlschlag (Challenges sind kurz, ~100–250
+Zeichen, kein Trunkierungsgrund).
+
+**Zusätzlich gefunden und mitgefixt (gleiche Ursache — "Fehlschläge nicht
+nachvollziehbar"):** `village/heartbeat.py::_api()` fing JEDEN Fehler ab
+und loggte nur `f"  [api] {e}"` — bei `HTTPError` ist das nur
+`"HTTP Error 400: Bad Request"`, der eigentliche Response-Body (Moltbooks
+echte Ablehnungsbegründung, z. B. "Incorrect answer") wurde nie gelesen.
+Jetzt: `HTTPError` wird gesondert behandelt, Body gelesen und geloggt
+(bis 500 Zeichen). Das war die eigentliche Ursache, warum ich den B_ClawAssistant-
+Fehlschlag aus §11 nicht mehr aufklären konnte — behoben für künftige Fälle,
+der bereits verbrauchte Versuch selbst ist nicht mehr rekonstruierbar.
+
+**72/72 Tests grün.**

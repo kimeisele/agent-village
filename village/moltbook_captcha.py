@@ -1186,14 +1186,20 @@ def solve_and_verify(mb_call, verification: dict) -> dict:
         monitor.record_success()
         logger.info(
             "solve_and_verify: solved (llm_fallback=%s). challenge=%r answer=%s",
-            used_llm_fallback, challenge_text[:60], answer_str,
+            used_llm_fallback, challenge_text, answer_str,
         )
         return {"solved": True, "answer": answer_str, "used_llm_fallback": used_llm_fallback, "response": resp}
 
     monitor.record_failure(challenge_text)
+    # FIX (docs/BEFUND.md §12): this used to log challenge_text[:60] —
+    # these challenges are short (one sentence, ~100-250 chars), truncating
+    # to 60 chars threw away exactly the part needed to debug a failure
+    # after the fact (the challenge itself is single-use and expires
+    # within minutes, so once logged-and-truncated the original is gone
+    # for good). Log the full text; it's never excessively long.
     logger.warning(
         "solve_and_verify: verify call failed (llm_fallback=%s). challenge=%r answer=%s response=%r",
-        used_llm_fallback, challenge_text[:60], answer_str, resp,
+        used_llm_fallback, challenge_text, answer_str, resp,
     )
     return {
         "solved": False,

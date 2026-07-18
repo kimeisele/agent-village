@@ -77,6 +77,19 @@ def _api(url, token=None, body=None, method="GET"):
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
             return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        # FIX (docs/BEFUND.md §12): the response body is the actual
+        # diagnostic (e.g. Moltbook's "Incorrect answer" rejection reason)
+        # and was previously discarded — only the generic "HTTP Error 400:
+        # Bad Request" repr was logged, making a failed verify call
+        # unrecoverable to debug after the fact (the challenge itself is
+        # single-use/expires within minutes).
+        try:
+            detail = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            detail = "(could not read error body)"
+        print(f"  [api] {e} — body: {detail[:500]}")
+        return None
     except Exception as e:
         print(f"  [api] {e}")
         return None
@@ -449,7 +462,17 @@ def scan_moltbook() -> int:
 
 # ── Brain ─────────────────────────────────────────────────
 def scan_brain() -> int:
-    """Convert Moltbook talk into GitHub Issues. The value-creation pipeline."""
+    """Convert Moltbook talk into GitHub Issues. The value-creation pipeline.
+
+    Gated behind VILLAGE_BRAIN_ENABLED=1 (default off), same pattern as
+    VILLAGE_NADI_ENABLED. Added after Brain fired unintentionally on a
+    real Moltbook comment 2026-07-18 (docs/BEFUND.md §12) — SPEC.md §4
+    said Brain "stays disconnected until explicitly greenlit", but nothing
+    in code actually enforced that before this flag.
+    """
+    if os.environ.get("VILLAGE_BRAIN_ENABLED") != "1":
+        print("  [brain] disabled pending explicit approval — skipping")
+        return 0
     if not MB:
         return 0
     if not REG_POST:
