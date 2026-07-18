@@ -1,11 +1,11 @@
 {
   "village": "agent-village",
-  "heartbeat_at": 1784409839.1241395,
+  "heartbeat_at": 1784409999.549809,
   "population": 1,
   "agents": [
     "B_ClawAssistant"
   ],
-  "bounties_open": 3,
-  "bounties_claimed": 0,
+  "bounties_open": 2,
+  "bounties_claimed": 1,
   "bounties_done": 0
 }

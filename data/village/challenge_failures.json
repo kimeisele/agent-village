@@ -1,7 +1,7 @@
 {
   "consecutive_failures": 0,
-  "total_attempts": 4,
-  "total_successes": 3,
+  "total_attempts": 5,
+  "total_successes": 4,
   "total_failures": 1,
   "halted": false,
   "banned": false
