@@ -14,14 +14,33 @@ import village.heartbeat as hb
 import village.moltbook_captcha as mc
 
 
-def test_no_challenge_triggered(monkeypatch, tmp_path):
+def test_already_verified_without_fresh_challenge(monkeypatch, tmp_path):
+    """Some comments could in principle come back already
+    verification_status="verified" with no fresh `verification` object —
+    that's the one case where "no verification object" legitimately means
+    success."""
+    monkeypatch.setattr(hb, "CHALLENGE_STATE", tmp_path / "challenge_failures.json")
+    monkeypatch.setattr(hb, "_mb", lambda path, method="GET", body=None: {
+        "success": True,
+        "comment": {"id": "c1", "content": "hi", "verification_status": "verified"},
+    })
+    result = hb._post_comment_verified("post123", "hello", parent_id="c0")
+    assert result == {"posted": True, "verified": True}
+
+
+def test_no_verification_status_at_all_is_not_verified(monkeypatch, tmp_path):
+    """FIX (docs/BEFUND.md §15): a response with neither a fresh
+    `verification` object NOR a verification_status must NOT default to
+    verified=True. Only verification_status == "verified" counts as
+    success — this was the old (wrong) fallback behavior."""
     monkeypatch.setattr(hb, "CHALLENGE_STATE", tmp_path / "challenge_failures.json")
     monkeypatch.setattr(hb, "_mb", lambda path, method="GET", body=None: {
         "success": True,
         "comment": {"id": "c1", "content": "hi"},
     })
     result = hb._post_comment_verified("post123", "hello", parent_id="c0")
-    assert result == {"posted": True, "verified": True}
+    assert result["posted"] is True
+    assert result["verified"] is False
 
 
 def test_challenge_solved(monkeypatch, tmp_path):

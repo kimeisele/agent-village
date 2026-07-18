@@ -837,3 +837,63 @@ für Bounty-Claim-Retry, verifiziert dass `bounty_claim()` beim Retry
 als Ablehnung durchgehen).
 
 **77/77 Tests grün.**
+
+---
+
+## §15 — Zwei echte Bugs aus der Live-Direktprüfung gefixt (2026-07-18, ~21:55 UTC)
+
+### Fund (vorheriger Bericht)
+
+Mein "confirmed on retry"-Log war ein **falscher Erfolg**. Live-Direktprüfung
+(authentifiziert + unauthentifiziert) zeigte: keine neue Antwort entstanden,
+nur die alte `"verification_status": "failed"`-Antwort weiterhin da. Direkt
+reproduziert: derselbe Text erneut gepostet → Moltbook antwortet
+`"already_existed": true`, liefert den **alten** Kommentar zurück, ohne
+frisches `verification`-Objekt.
+
+### Fix 1 — Interpretationsfehler
+
+`_post_comment_verified()` prüfte nur, ob `comment.verification` fehlt, und
+nahm das fälschlich als "kein Challenge nötig → verifiziert". Jetzt: explizit
+`comment.verification_status`. Nur `"verified"` zählt als Erfolg (verifiziert
+am bekannten Erfolgsfall — Brains Bestätigung, `e1c9b824`, hatte exakt
+`verification_status: "verified"`). Fehlt `verification_status` UND
+`verification` beide, gilt das jetzt als **nicht verifiziert** — bewusst
+konservativ, wie von dir vorgegeben ("nur bei verified als verified:true").
+
+### Fix 2 — Duplikat-Problem
+
+Registrierungs-/Bounty-Antworttexte sind deterministisch (Name/Zone/Pop/
+Bounty-Zahl) → bei Retries byte-identisch → Moltbook liefert immer den alten,
+verbrauchten Kommentar zurück, nie eine neue Challenge. Neuer Helper
+`_retry_suffix(attempts)`: leer beim ersten Versuch (sauberer Text im
+Normalfall), ab Retry 1 `" (attempt N)"` angehängt. Jeder Pending-Eintrag
+trägt jetzt einen `attempts`-Zähler, der bei jedem Fehlschlag hochgezählt
+wird.
+
+### Tests
+
+- `test_duplicate_content_verify.py`: exakte Reproduktion des Live-Funds
+  (`already_existed: true` + `verification_status: "failed"` → `verified:
+  False`), plus derselbe Fall mit `"pending"` statt `"failed"`, plus
+  Bestätigung dass zwei aufeinanderfolgende Registrierungsversuche
+  unterschiedlichen Text erzeugen (Kernaussage unverändert, nur Suffix
+  anders).
+- `test_heartbeat_verify.py` aktualisiert: der alte Test (kein
+  `verification`-Objekt → automatisch verifiziert) beschrieb genau das
+  alte Fehlverhalten — durch zwei neue Tests ersetzt (echter Verified-Fall
+  vs. fehlendes Status-Feld → nicht verifiziert).
+
+**81/81 Tests grün.**
+
+### Punkt 4 — B_ClawAssistants Fall vorab durchdacht (nicht nur live probiert)
+
+Sein Kommentar wurde durch den Bug fälschlich als "erledigt" markiert
+(§14-Korrektur wurde vom fehlerhaften Retry-Lauf wieder überschrieben) —
+zweite manuelle Datenkorrektur: zurück nach `pending_confirmations.json`,
+diesmal mit explizitem `"attempts": 1`. Damit erzeugt der nächste
+Retry-Versuch `_retry_suffix(1)` = `" (attempt 2)"` → Text lautet
+`"...Pop: 1 | Open bounties: 3 (attempt 2)"`, byte-verschieden vom alten
+Text (ohne Suffix) → Moltbooks Duplikat-Erkennung sollte NICHT greifen,
+eine frische Challenge sollte ausgegeben werden. Das ist die Grundlage für
+den folgenden Testlauf, nicht erst live geraten.

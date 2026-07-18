@@ -65,6 +65,20 @@ def _kw_match(text: str, *keywords: str) -> bool:
     return any(re.search(rf"\b{re.escape(kw)}\b", text_lower) for kw in keywords)
 
 
+def _retry_suffix(attempts: int) -> str:
+    """Small, honest suffix to make a retried confirmation reply's text
+    unique. FIX (docs/BEFUND.md §15, real bug found live 2026-07-18):
+    Moltbook deduplicates identical comment content and silently returns
+    the OLD (already-failed) comment instead of creating a new one with a
+    fresh challenge — a byte-identical retry can therefore never succeed,
+    no matter how many times it's attempted. `attempts` is 0 on the very
+    first try (no suffix, keeps the common case clean) and >=1 on each
+    retry attempt."""
+    if attempts <= 0:
+        return ""
+    return f" (attempt {attempts + 1})"
+
+
 # ── API helpers ─────────────────────────────────────────
 def _load(p: Path) -> dict:
     return json.loads(p.read_text()) if p.exists() else {}
@@ -182,10 +196,34 @@ def _post_comment_verified(post_id: str, content: str, parent_id: str | None = N
         return {"posted": False, "reason": "post_failed", "response": resp}
 
     comment = resp.get("comment", {})
+    verification_status = comment.get("verification_status")
     verification = comment.get("verification")
-    if not verification:
-        # No challenge triggered for this comment.
+
+    if verification_status == "verified":
+        # Already verified without us doing anything this call — some
+        # comments apparently don't require a challenge at all.
         return {"posted": True, "verified": True}
+
+    if not verification:
+        # FIX (docs/BEFUND.md §15, real bug found live 2026-07-18): a
+        # missing `verification` object does NOT mean "no challenge was
+        # needed, treat as verified". Moltbook's duplicate-content
+        # detection ("already_existed": true) returns the OLD comment —
+        # verification_status often "failed" or "pending" from a PAST
+        # attempt — without a fresh verification object to solve. Only
+        # verification_status == "verified" (checked above) counts as
+        # success; anything else here is NOT verified, even without a
+        # fresh challenge to act on.
+        print(
+            f"  [mb] comment returned without a fresh challenge "
+            f"(verification_status={verification_status!r}, "
+            f"already_existed={comment.get('already_existed')}) — treating as NOT verified"
+        )
+        return {
+            "posted": True,
+            "verified": False,
+            "reason": f"no_fresh_challenge_status_{verification_status}",
+        }
 
     result = solve_and_verify(_mb, verification)
     if result.get("solved"):
@@ -384,10 +422,11 @@ def scan_moltbook() -> int:
     # still awaiting its first successful confirmation.
     for cid, info in list(pending["registration"].items()):
         name = info["name"]
+        attempts = info.get("attempts", 1)
         ident = dex_register(name)  # idempotent; just need element/zone/guardian again
         result = _post_comment_verified(
             REG_POST,
-            f"🦞 **{name}** registered! {ident['element']}/{ident['zone']}/{ident['guardian']}. Pop: {_load(POKEDEX).get('total',0)} | Open bounties: {len(bounty_list())}",
+            f"🦞 **{name}** registered! {ident['element']}/{ident['zone']}/{ident['guardian']}. Pop: {_load(POKEDEX).get('total',0)} | Open bounties: {len(bounty_list())}{_retry_suffix(attempts)}",
             parent_id=cid,
         )
         if result.get("verified"):
@@ -396,12 +435,14 @@ def scan_moltbook() -> int:
             c += 1
             print(f"  [mb] reg {name} confirmed on retry")
         else:
+            pending["registration"][cid]["attempts"] = attempts + 1
             print(f"  [mb] reg {name} still not verified ({result.get('reason')}), retrying next cycle")
 
     for cid, info in list(pending["bounty_claim"].items()):
+        attempts = info.get("attempts", 1)
         result = _post_comment_verified(
             REG_POST,
-            f"🦞 **{info['sender']}** claimed bounty `{info['bid']}`: {info['title']}",
+            f"🦞 **{info['sender']}** claimed bounty `{info['bid']}`: {info['title']}{_retry_suffix(attempts)}",
             parent_id=cid,
         )
         if result.get("verified"):
@@ -410,24 +451,28 @@ def scan_moltbook() -> int:
             c += 1
             print(f"  [mb] bounty {info['bid']} claim confirmed on retry")
         else:
+            pending["bounty_claim"][cid]["attempts"] = attempts + 1
             print(f"  [mb] bounty {info['bid']} claim still not verified ({result.get('reason')}), retrying next cycle")
 
     for cid, info in list(pending["bounty_reject"].items()):
+        attempts = info.get("attempts", 1)
         result = _post_comment_verified(
             REG_POST,
-            f"❌ Bounty `{info['bid']}` not available (already claimed or not found).",
+            f"❌ Bounty `{info['bid']}` not available (already claimed or not found).{_retry_suffix(attempts)}",
             parent_id=cid,
         )
         if result.get("verified"):
             proc.add(cid)
             del pending["bounty_reject"][cid]
         else:
+            pending["bounty_reject"][cid]["attempts"] = attempts + 1
             print(f"  [mb] bounty {info['bid']} rejection still not verified ({result.get('reason')}), retrying next cycle")
 
     for cid, info in list(pending["bounty_done"].items()):
+        attempts = info.get("attempts", 1)
         result = _post_comment_verified(
             REG_POST,
-            f"✅ Bounty `{info['bid']}` complete: {info['title']} — claimed by {info['claimed_by']}",
+            f"✅ Bounty `{info['bid']}` complete: {info['title']} — claimed by {info['claimed_by']}{_retry_suffix(attempts)}",
             parent_id=cid,
         )
         if result.get("verified"):
@@ -436,6 +481,7 @@ def scan_moltbook() -> int:
             c += 1
             print(f"  [mb] bounty {info['bid']} done confirmed on retry")
         else:
+            pending["bounty_done"][cid]["attempts"] = attempts + 1
             print(f"  [mb] bounty {info['bid']} done still not verified ({result.get('reason')}), retrying next cycle")
 
     resp = _mb(f"posts/{REG_POST}/comments?sort=new&limit=50")
@@ -483,7 +529,7 @@ def scan_moltbook() -> int:
                 c += 1
                 print(f"  [mb] reg {name} via {sender}")
             else:
-                pending["registration"][cid] = {"name": name}
+                pending["registration"][cid] = {"name": name, "attempts": 1}
                 print(f"  [mb] reg {name} via {sender} — reply not verified ({result.get('reason')}), retrying next cycle")
             continue
 
@@ -512,7 +558,7 @@ def scan_moltbook() -> int:
                     c += 1
                     print(f"  [mb] bounty {bid} claimed by {sender}")
                 else:
-                    pending["bounty_claim"][cid] = {"bid": bid, "sender": sender, "title": result["title"]}
+                    pending["bounty_claim"][cid] = {"bid": bid, "sender": sender, "title": result["title"], "attempts": 1}
                     print(f"  [mb] bounty {bid} claim reply not verified ({reply.get('reason')}), retrying next cycle")
             else:
                 reply = _post_comment_verified(
@@ -523,7 +569,7 @@ def scan_moltbook() -> int:
                 if reply.get("verified"):
                     proc.add(cid)
                 else:
-                    pending["bounty_reject"][cid] = {"bid": bid}
+                    pending["bounty_reject"][cid] = {"bid": bid, "attempts": 1}
                     print(f"  [mb] bounty {bid} rejection reply not verified ({reply.get('reason')}), retrying next cycle")
             continue
 
@@ -546,7 +592,7 @@ def scan_moltbook() -> int:
                     c += 1
                     print(f"  [mb] bounty {bid} done by {sender}")
                 else:
-                    pending["bounty_done"][cid] = {"bid": bid, "title": result["title"], "claimed_by": result["claimed_by"]}
+                    pending["bounty_done"][cid] = {"bid": bid, "title": result["title"], "claimed_by": result["claimed_by"], "attempts": 1}
                     print(f"  [mb] bounty {bid} done reply not verified ({reply.get('reason')}), retrying next cycle")
             else:
                 # bounty_complete() found nothing to complete — no reply
