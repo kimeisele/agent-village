@@ -26,6 +26,11 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           NODE_PRIVATE_KEY: ${{ secrets.NODE_PRIVATE_KEY }}
           MOLTBOOK_API_KEY: ${{ secrets.MOLTBOOK_API_KEY }}
+          # Repo variable, not a secret — this is a public post ID, not
+          # sensitive. No hardcoded fallback (see village/heartbeat.py):
+          # if unset, the Moltbook scan logs and skips instead of silently
+          # using the wrong post.
+          MB_REG_POST: ${{ vars.MB_REG_POST }}
         run: python3 village/heartbeat.py
 
       - name: Commit state changes

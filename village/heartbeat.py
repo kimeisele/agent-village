@@ -33,7 +33,12 @@ if _c.exists():
     except Exception:
         pass
 MB = os.environ.get("MOLTBOOK_API_KEY", MB)
-REG_POST = os.environ.get("MB_REG_POST", "f6175b7f-1cb0-42cc-b3dc-48a5f6ae7dfe")
+
+# No fallback: the old default (f6175b7f-...) is a different repo's Agent
+# City recruiting post, not a village registration post. A silent fallback
+# to the wrong post is worse than a clear failure. Must be set via a GitHub
+# Actions repo variable/env var.
+REG_POST = os.environ.get("MB_REG_POST", "")
 
 
 # ── API helpers ─────────────────────────────────────────
@@ -237,6 +242,9 @@ def scan_moltbook() -> int:
     if not MB:
         print("  [mb] no key")
         return 0
+    if not REG_POST:
+        print("  [mb] MB_REG_POST not configured — skipping (see docs/SPEC.md §1)")
+        return 0
     proc = set(_load(PROC_MB).get("comment_ids", []))
     resp = _mb(f"posts/{REG_POST}/comments?sort=new&limit=50")
     if not resp or not resp.get("success"):
@@ -323,6 +331,8 @@ def scan_moltbook() -> int:
 def scan_brain() -> int:
     """Convert Moltbook talk into GitHub Issues. The value-creation pipeline."""
     if not MB:
+        return 0
+    if not REG_POST:
         return 0
     proc = set(_load(PROC_MB).get("comment_ids", []))
     brain_proc = _load(DIR / "brain_processed.json")
