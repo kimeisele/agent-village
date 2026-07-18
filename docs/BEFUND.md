@@ -638,3 +638,45 @@ weiterhin sofort mit "MB_REG_POST not configured — skipping" abbrechen.
 **Ich brauche von dir:** die Post-ID (oder den vollen Moltbook-Permalink)
 des dedizierten Village-Registrierungsposts, bevor ich mit dem
 kontrollierten Testlauf fortfahren kann.
+
+---
+
+## §10 — Wortgrenzen-Bug behoben (2026-07-18, ~20:55 UTC)
+
+Bug live gefunden beim Prüfen von B_ClawAssistants Kommentar-Thread: ein
+zweiter Kommentar (Account "rebelcrustacean", Karma 30663) enthält den
+Hashtag `#joinCAPUnion`. Der bisherige Keyword-Check war ein reiner
+Substring-Test (`kw in text.lower()`), der "join" auch als Teilstring
+innerhalb von "joincapunion" fand — hätte diesen völlig unabhängigen
+Kommentar fälschlich als Registrierung behandelt.
+
+**Fix:** neue Helper-Funktion `_kw_match(text, *keywords)` in
+`village/heartbeat.py`, nutzt `\bkeyword\b`-Regex statt Substring-Suche.
+Vorab verifiziert (nicht blind übernommen): `\b...\b` funktioniert korrekt
+sowohl für Einzelwörter ("join") als auch Mehrwort-Phrasen ("sign up",
+"add me") — 11 Testfälle einzeln durchgerechnet, alle korrekt.
+
+Angewendet auf **alle** gleichartigen Stellen in `heartbeat.py`, nicht nur
+"join":
+- `scan_moltbook()`: Registrierungs-Keywords (join/register/sign up/add me)
+- `scan_moltbook()`: Bounty-Claim-Regex (`\bclaim\s+(b\d+)` statt
+  `claim\s+(b\d+)` — hätte sonst z. B. "unclaimed b001" fälschlich
+  gematcht)
+- `scan_moltbook()`: Bounty-Done-Regex (`\bdone\s+(b\d+)` statt
+  `done\s+(b\d+)` — hätte sonst "undone b001" fälschlich gematcht)
+- `scan_brain()`: Registrierungs-/Bounty-Skip-Keywords (dieselbe Liste)
+
+**Nicht angefasst (außerhalb des angefragten Scopes):** `village/brain.py`s
+`FEATURE_KEYWORDS`/`BUG_KEYWORDS` (`is_actionable()`) nutzen denselben
+Substring-Musterfehler, aber Brain ist weiterhin vom Haupt-Heartbeat
+getrennt (SPEC.md §4) und war explizit nicht Teil dieses Auftrags. Flagge
+für später.
+
+**Test:** `tests/test_keyword_matching.py` — exakt der live gefundene
+Fehlerfall (`#joinCAPUnion` darf nicht matchen) plus Regressionsschutz
+(normale "join"-Sätze müssen weiter matchen) plus die beiden Bounty-Regex-
+Fälle. Zusätzlich gegen den **echten** Kommentartext von B_ClawAssistant
+und rebelcrustacean verifiziert (nicht nur synthetische Testfälle):
+B_ClawAssistant → matcht, rebelcrustacean → matcht nicht mehr.
+
+**69/69 Tests grün.**

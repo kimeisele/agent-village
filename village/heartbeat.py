@@ -42,6 +42,20 @@ MB = os.environ.get("MOLTBOOK_API_KEY", MB)
 REG_POST = os.environ.get("MB_REG_POST", "")
 
 
+def _kw_match(text: str, *keywords: str) -> bool:
+    """Word-boundary keyword match — NOT a substring check.
+
+    Fix for a real bug found live 2026-07-18: a plain `kw in text.lower()`
+    check matched "join" inside "#joinCAPUnion", causing a comment that had
+    nothing to do with registration to be treated as one. \\b on both sides
+    works correctly for single words ("join") AND multi-word phrases
+    ("sign up") — verified against both cases, not assumed. See
+    docs/BEFUND.md §10.
+    """
+    text_lower = text.lower()
+    return any(re.search(rf"\b{re.escape(kw)}\b", text_lower) for kw in keywords)
+
+
 # ── API helpers ─────────────────────────────────────────
 def _load(p: Path) -> dict:
     return json.loads(p.read_text()) if p.exists() else {}
@@ -351,7 +365,7 @@ def scan_moltbook() -> int:
         # (dup checks), so re-running them on retry is safe.
 
         # --- Registration intent ---
-        if any(kw in text.lower() for kw in ["join", "register", "sign up", "add me"]):
+        if _kw_match(text, "join", "register", "sign up", "add me"):
             m = re.search(r"name[:\s]+([^\n]+)", text, re.I)
             name = m.group(1).strip() if m else sender
             ident = dex_register(name)
@@ -374,7 +388,7 @@ def scan_moltbook() -> int:
             continue
 
         # --- Bounty claim ---
-        m = re.search(r"claim\s+(b\d+)", text, re.I)
+        m = re.search(r"\bclaim\s+(b\d+)", text, re.I)
         if m:
             bid = m.group(1)
             result = bounty_claim(bid, sender)
@@ -403,7 +417,7 @@ def scan_moltbook() -> int:
             continue
 
         # --- Bounty done ---
-        m = re.search(r"done\s+(b\d+)", text, re.I)
+        m = re.search(r"\bdone\s+(b\d+)", text, re.I)
         if m:
             bid = m.group(1)
             result = bounty_complete(bid)
@@ -455,7 +469,7 @@ def scan_brain() -> int:
             continue
         text = cmt.get("content", "")
         # Skip registration/bounty comments (already handled)
-        if any(kw in text.lower() for kw in ["join", "register", "claim", "done", "sign up"]):
+        if _kw_match(text, "join", "register", "claim", "done", "sign up"):
             continue
 
         try:
