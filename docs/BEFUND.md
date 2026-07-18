@@ -680,3 +680,43 @@ und rebelcrustacean verifiziert (nicht nur synthetische Testfälle):
 B_ClawAssistant → matcht, rebelcrustacean → matcht nicht mehr.
 
 **69/69 Tests grün.**
+
+---
+
+## §11 — Erster echter workflow_dispatch-Lauf: ModuleNotFoundError, gefixt (2026-07-18, ~21:00 UTC)
+
+Erster Testlauf (Run `29659480067`, ausgelöst per `gh workflow run
+village-heartbeat.yml`) **schlug fehl**:
+
+```
+Traceback (most recent call last):
+  File ".../village/heartbeat.py", line 555, in <module>
+    heartbeat()
+  File ".../village/heartbeat.py", line 529, in heartbeat
+    _load_challenge_monitor_state()
+  File ".../village/heartbeat.py", line 98, in _load_challenge_monitor_state
+    from village.moltbook_captcha import get_challenge_monitor
+ModuleNotFoundError: No module named 'village'
+```
+
+**Ursache:** Workflow rief `python3 village/heartbeat.py` direkt auf. Bei
+direktem Skript-Aufruf legt Python das Skript-Verzeichnis (`village/`)
+selbst auf `sys.path`, nicht das Repo-Root — `from village.moltbook_captcha
+import ...` kann das `village`-Package dadurch nicht finden. **Dieser Bug
+war vorher latent**, weil der einzige vorherige `from village.X import`-
+Aufruf (`nadi_bridge`, NADI) hinter `VILLAGE_NADI_ENABLED` (default aus)
+lag und nie ausgeführt wurde — mein heutiger `_load_challenge_monitor_state()`-
+Aufruf ist der erste **unbedingte** `village.*`-Import, der in einem echten
+CI-Lauf je erreicht wurde.
+
+**Fix:** `.github/workflows/village-heartbeat.yml` — `run: python3
+-m village.heartbeat` statt `python3 village/heartbeat.py`. Lokal
+verifiziert: `python3 -m village.heartbeat` läuft ohne Fehler
+(Repo-Root korrekt auf `sys.path`). `heartbeat.yml` (NADI, separater
+Workflow) ruft `village/heartbeat.py` nicht auf — nicht betroffen, kein
+Fix nötig dort.
+
+Lokaler Testlauf zur Verifikation hat testweise `data/village/state.json`
+verändert und `challenge_failures.json` neu erzeugt — beides vor dem Commit
+zurückgesetzt/gelöscht, damit der folgende echte Actions-Lauf einen sauberen
+Diff zeigt.

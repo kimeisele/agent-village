@@ -31,7 +31,13 @@ jobs:
           # if unset, the Moltbook scan logs and skips instead of silently
           # using the wrong post.
           MB_REG_POST: ${{ vars.MB_REG_POST }}
-        run: python3 village/heartbeat.py
+        # Run as a module, not `python3 village/heartbeat.py` directly.
+        # Direct script invocation puts village/ itself on sys.path, not
+        # the repo root, so `from village.moltbook_captcha import ...`
+        # fails with ModuleNotFoundError: No module named 'village' — hit
+        # live 2026-07-18 (run 29659480067), see docs/BEFUND.md §11.
+        # `-m` runs with the repo root on sys.path, resolving it correctly.
+        run: python3 -m village.heartbeat
 
       - name: Commit state changes
         run: |
