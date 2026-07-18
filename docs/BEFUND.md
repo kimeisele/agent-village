@@ -315,3 +315,106 @@ keine Änderung). **Kein drittes Repo angerührt.**
 - Stichprobe ist klein (n=5, alle vom selben Account, in kurzer Zeit
   erzeugt) — keine Garantie, dass künftig auch andere Operationen
   (Subtraktion, Multiplikation, andere Themen als "Lobster") vorkommen.
+
+---
+
+## §5 — Captcha-Solver portiert, RAMA-Ersatz kalibriert (2026-07-18, ~20:10 UTC)
+
+### Was ersetzt wurde und warum
+
+`village/moltbook_captcha.py` (neu) portiert `ChallengeSolver` (moltbook.py Z.
+161–409) und `CaptchaChamber` (captcha_decoder.py, komplett) aus
+`kimeisele/steward-protocol`, Commit `34a8a0efc25c15ef7c07dd4fb50aeb2510c071e8`
+(read-only geklont, nichts dort verändert).
+
+Strategien 1–3 (`exact`, `collapse`, `direct`) unverändert — brauchen nur
+Vokabel-Dict-Matching, keine phonetische Kodierung. Strategie 4
+(`aggressive`) nutzte im Original für ihren Fuzzy-Fallback (einzelne,
+≥6-Zeichen unerkannte Tokens) das hauseigene RAMA-Sanskrit-Phonetiksystem
+(`encode_text` + `basin_cosine`/`hkr_similarity`). Das hätte ~1.800 Zeilen
+unrelated Abhängigkeitscode nach agent-village gezogen (`phonetic_encoder.py`,
+`basin_map.py`, `rama_grid.py`, `pancha_walk.py`, `varnamala_codec.py`,
+`protocols/_seed.py`) — verstößt gegen das SPEC-Prinzip "keine City-Module
+wholesale kopieren". Ersetzt durch `difflib.SequenceMatcher(None, a,
+b).ratio()`: gleiche Rolle (unscharfer Einzeltoken-Vergleich gegen die
+Vokabelliste), andere Metrik. Akzeptanzschwelle (>0.95) unverändert vom
+Original übernommen; Längenfilter von RAMA-Koordinatenlänge (`>1`) auf
+Zeichenlänge (`>2`) angepasst, da difflib auf rohen Strings statt
+Phonem-Tupeln arbeitet.
+
+### Kalibrierungscheck (Punkt 4 des Auftrags)
+
+50 Tests, zwei Quellen: `test_moltbook.py`-Fälle (Subtraktion/Multiplikation/
+Division/Dezimalzahlen/verkettete Operationen/Wort-Fragment-Reassemblierung)
++ unsere 5 echten Live-Samples aus §4.
+
+**48/50 grün.** Die `test_moltbook.py`-Fälle: alle grün, inkl. des dort
+enthaltenen echten "LOBSTER_CAPTCHA"-Fixtures (23+4=27), das gezielt die
+aggressive/Fuzzy-Strategie durchläuft — **die difflib-Ersetzung selbst
+funktioniert korrekt.**
+
+**2/5 unserer eigenen Samples scheitern** (`test_sample_3_post`,
+`test_sample_5_post` — beide "velocity"-Fragen: "what's the new velocity?").
+Root-Cause-Analyse per direkter Strategie-Verfolgung:
+
+- **Nicht die difflib-Ersetzung.** Verifiziert: Sowohl `collapse` als auch
+  `aggressive` dekodieren in beiden Fällen alle nötigen Zahlwörter korrekt
+  (z. B. Sample 3 → `"...twenty-seven centimeters ... five, whats the new
+  veloocity"`, "five" korrekt als eigenes Wort erkannt — die Fuzzy-Stufe wird
+  dafür gar nicht gebraucht). Das Problem liegt **danach**, in
+  `_extract_math()`.
+- **Tatsächliche Ursache — geerbt vom Original, nicht von mir eingeführt:**
+  `_extract_math()` erkennt eine Operation nur, wenn ein explizites
+  Operator-Wort (plus/add/minus/times/divided/…) ODER ein Kontext-Wort
+  (total/sum/altogether/combined/together/all/both/difference/…) im
+  dekodierten Text vorkommt. Sample 4 (funktioniert) enthält `"...WhAt Is ThE
+  ToTaL FoRcE?"` — das Wort "total" triggert die Additions-Inferenz. Sample 3
+  und 5 fragen stattdessen `"...WhAtS tHe NeW VeLoOciTyYY?"` bzw. `"...WwHhAaTt'S
+  TtHhEe NnEeWw VvEeLlOoOcCiItTy?"` — kein Trigger-Wort vorhanden, obwohl
+  "and"/"gains" umgangssprachlich Addition bedeuten. Diese Wortlisten habe ich
+  1:1 aus dem Original übernommen (unverändert) — **dieselbe Lücke existiert
+  in der unveränderten steward-protocol-Quelle für dieselben Formulierungen.**
+  Bestätigt durch Vergleichstest: Sample 4 mit "total" → korrekt gelöst (57);
+  identisch aufgebaute Sample-3/5-Texte ohne Trigger-Wort → nicht gelöst.
+
+- **Konkretes, wichtigeres Sicherheitsproblem dabei entdeckt** (nicht nur
+  "kippt bei welcher Schwelle", sondern: kippt in die falsche Richtung —
+  akzeptiert statt korrekt zu verwerfen):
+  Für Sample 3 liefert **nur** `_strategy_exact` (Fenster 4) einen Kandidaten:
+  `answer='27'` (nur die erste Zahl, "five" nicht mehr im schmalen Fenster
+  erkannt) mit Score **2.39** — **über** der Konfidenzschwelle 2.25/6.0.
+  Score-Aufschlüsselung: `expression=0.3, consensus=0.25, range=1.0,
+  completeness=0.5, decode_fidelity=0.038, structural_conformity=0.3`.
+  Für Sample 5 identisches Muster: `answer='3'`, Score ebenfalls **2.39**,
+  gleiche Aufschlüsselung. **Das System liefert hier keine `None`-Antwort
+  (safe skip), sondern eine falsche, "konfidente" Zahl — genau das Verhalten,
+  das der Konfidenz-Mechanismus laut Quelldoc verhindern soll ("Not '0'. Not
+  a guess.").**
+  Ursache: `_score_range` (1.0, weil 27/3 plausible Werte sind) und
+  `_score_completeness` (0.5, weil trotz fehlendem Operator ≥1 Zahl gefunden
+  wurde) sind beide unverändert aus dem Original übernommen und bewerten
+  einen unvollständigen Ein-Zahl-Treffer nicht mit 0 — auch das ist eine
+  Eigenschaft des Original-Scorings, keine Folge meiner Anpassung.
+
+**Fazit zur eigentlichen Frage ("difflib-Ersatz spürbar anders kalibriert?"):
+Nein — die Konfidenzschwelle 2.25/6.0 selbst zeigt bei den echten Fehlschlägen
+kein anderes Verhalten als es das unveränderte Originalsystem für dieselbe
+Eingabe auch zeigen würde.** Das eigentliche Problem (2 von 5 Samples) ist
+eine vom Original geerbte Vokabellücke (fehlendes "and"/"gains" als
+Additions-Trigger) plus ein Scoring-Verhalten, das unvollständige
+Ein-Zahl-Treffer nicht hart genug bestraft. Ich habe daran **nichts
+geändert** — weder Schwelle noch Scoring-Gewichte — wie angewiesen. Deine
+Entscheidung, ob/wie das vor einer echten Aktivierung behoben wird
+(z. B. "and"/"gains" zu den Trigger-Wörtern hinzufügen, oder
+`_score_completeness`/`_score_range` für Ein-Zahl-Ausdrücke auf 0 setzen,
+oder Schwelle anheben).
+
+### Tests
+
+`tests/test_moltbook_captcha.py`, 50 Fälle: 8 Arithmetik + 6 Regression + 9
+Advanced + 5 Properties (alle aus `test_moltbook.py` adaptiert) + 6
+CaptchaChamber-Solve (inkl. LOBSTER_CAPTCHA) + 3 Confidence + 5 Pipeline +
+5 eigene Live-Samples + 3 `solve_and_verify()` (gemockt). **48 grün, 2 rot**
+(Sample 3, Sample 5 — Ursache oben dokumentiert, kein Blocker für den
+Live-Test, da die anderen 3 Samples inkl. des Original-Lobster-Fixtures
+sauber durchlaufen).
