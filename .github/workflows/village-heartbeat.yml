@@ -31,6 +31,13 @@ jobs:
           # if unset, the Moltbook scan logs and skips instead of silently
           # using the wrong post.
           MB_REG_POST: ${{ vars.MB_REG_POST }}
+          # Feature flags (docs/BEFUND.md §12/§13), all default off. Were
+          # never actually wired through to the workflow before — setting
+          # the repo variable alone did nothing (found while running the
+          # controlled Brain test, docs/BEFUND.md §17).
+          VILLAGE_BRAIN_ENABLED: ${{ vars.VILLAGE_BRAIN_ENABLED }}
+          VILLAGE_BOUNTIES_ENABLED: ${{ vars.VILLAGE_BOUNTIES_ENABLED }}
+          VILLAGE_NADI_ENABLED: ${{ vars.VILLAGE_NADI_ENABLED }}
         # Run as a module, not `python3 village/heartbeat.py` directly.
         # Direct script invocation puts village/ itself on sys.path, not
         # the repo root, so `from village.moltbook_captcha import ...`
