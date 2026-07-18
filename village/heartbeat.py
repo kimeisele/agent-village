@@ -75,6 +75,48 @@ def _mb(path, method="GET", body=None):
     return _api(f"https://www.moltbook.com/api/v1/{path}", MB, body, method)
 
 
+def _post_comment_verified(post_id: str, content: str, parent_id: str | None = None) -> dict:
+    """Post a Moltbook comment and, if it triggers a verify challenge
+    (see docs/BEFUND.md §3), solve it automatically via
+    village/moltbook_captcha.py and submit the answer before the comment
+    counts as done.
+
+    Skips posting entirely — does not even attempt the comment — if the
+    ChallengeMonitor is already halted (5+ consecutive failures this
+    process). Each `python3 village/heartbeat.py` run is a fresh process
+    on a fresh GitHub Actions runner, so this halt only applies within a
+    single 15-minute cycle; see docs/BEFUND.md §8 for the cross-cycle
+    ban-threshold discussion (not implemented, proposal only).
+    """
+    from village.moltbook_captcha import get_challenge_monitor, solve_and_verify
+
+    monitor = get_challenge_monitor()
+    if monitor.is_halted:
+        print(f"  [mb] challenge monitor halted this cycle, skipping comment: {content[:50]!r}")
+        return {"posted": False, "reason": "monitor_halted"}
+
+    body: dict = {"content": content}
+    if parent_id:
+        body["parent_id"] = parent_id
+    resp = _mb(f"posts/{post_id}/comments", "POST", body)
+    if not resp or not resp.get("success"):
+        print(f"  [mb] comment post failed: {resp}")
+        return {"posted": False, "reason": "post_failed", "response": resp}
+
+    comment = resp.get("comment", {})
+    verification = comment.get("verification")
+    if not verification:
+        # No challenge triggered for this comment.
+        return {"posted": True, "verified": True}
+
+    result = solve_and_verify(_mb, verification)
+    if result.get("solved"):
+        print(f"  [mb] comment verified (llm_fallback={result.get('used_llm_fallback')})")
+    else:
+        print(f"  [mb] comment posted but NOT verified: {result.get('reason')}")
+    return {"posted": True, "verified": bool(result.get("solved")), "verify_result": result}
+
+
 # ── Identity ─────────────────────────────────────────────
 _EL = {
     "a": "akasha",
@@ -266,13 +308,10 @@ def scan_moltbook() -> int:
             ident = dex_register(name)
             if ident.get("_dup"):
                 continue
-            _mb(
-                f"posts/{REG_POST}/comments",
-                "POST",
-                {
-                    "content": f"🦞 **{name}** registered! {ident['element']}/{ident['zone']}/{ident['guardian']}. Pop: {_load(POKEDEX).get('total',0)} | Open bounties: {len(bounty_list())}",
-                    "parent_id": cid,
-                },
+            _post_comment_verified(
+                REG_POST,
+                f"🦞 **{name}** registered! {ident['element']}/{ident['zone']}/{ident['guardian']}. Pop: {_load(POKEDEX).get('total',0)} | Open bounties: {len(bounty_list())}",
+                parent_id=cid,
             )
             c += 1
             print(f"  [mb] reg {name} via {sender}")
@@ -284,24 +323,18 @@ def scan_moltbook() -> int:
             bid = m.group(1)
             result = bounty_claim(bid, sender)
             if result:
-                _mb(
-                    f"posts/{REG_POST}/comments",
-                    "POST",
-                    {
-                        "content": f"🦞 **{sender}** claimed bounty `{bid}`: {result['title']}",
-                        "parent_id": cid,
-                    },
+                _post_comment_verified(
+                    REG_POST,
+                    f"🦞 **{sender}** claimed bounty `{bid}`: {result['title']}",
+                    parent_id=cid,
                 )
                 c += 1
                 print(f"  [mb] bounty {bid} claimed by {sender}")
             else:
-                _mb(
-                    f"posts/{REG_POST}/comments",
-                    "POST",
-                    {
-                        "content": f"❌ Bounty `{bid}` not available (already claimed or not found).",
-                        "parent_id": cid,
-                    },
+                _post_comment_verified(
+                    REG_POST,
+                    f"❌ Bounty `{bid}` not available (already claimed or not found).",
+                    parent_id=cid,
                 )
             continue
 
@@ -311,13 +344,10 @@ def scan_moltbook() -> int:
             bid = m.group(1)
             result = bounty_complete(bid)
             if result:
-                _mb(
-                    f"posts/{REG_POST}/comments",
-                    "POST",
-                    {
-                        "content": f"✅ Bounty `{bid}` complete: {result['title']} — claimed by {result['claimed_by']}",
-                        "parent_id": cid,
-                    },
+                _post_comment_verified(
+                    REG_POST,
+                    f"✅ Bounty `{bid}` complete: {result['title']} — claimed by {result['claimed_by']}",
+                    parent_id=cid,
                 )
                 c += 1
                 print(f"  [mb] bounty {bid} done by {sender}")
@@ -367,10 +397,11 @@ def scan_brain() -> int:
                 if issue:
                     brain_proc.setdefault("issues", {})[cid] = issue.get("number", 0)
                     _save(DIR / "brain_processed.json", brain_proc)
-                    _mb(f"posts/{REG_POST}/comments", "POST", {
-                        "content": f"🧠 **Brain:** Created issue #{issue.get('number')} — {title}",
-                        "parent_id": cid,
-                    })
+                    _post_comment_verified(
+                        REG_POST,
+                        f"🧠 **Brain:** Created issue #{issue.get('number')} — {title}",
+                        parent_id=cid,
+                    )
                     c += 1
                     print(f"  [brain] Issue #{issue.get('number')}: {title}")
         except ImportError:
