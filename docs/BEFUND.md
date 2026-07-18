@@ -190,3 +190,58 @@ bis Proof 1 freigegeben wird.
 agent-village aufgebaut (die zwei aus hermes-sankhya-25 entfernten Tests
 wurden nicht hierher portiert) — das wäre neue Arbeit über "Dateien
 verschieben" hinaus und war nicht angewiesen.
+
+---
+
+## §3 — MB_REG_POST-Fix + Verify-Challenge-Verifikation (2026-07-18, ~19:15 UTC)
+
+### MB_REG_POST (Bug-Fix)
+
+`village/heartbeat.py` hatte einen hardcoded Fallback auf `f6175b7f-...`
+(hermes-sankhya-25s Agent-City-Recruiting-Post, thematisch falsch). Entfernt:
+`REG_POST = os.environ.get("MB_REG_POST", "")` — leerer Default, kein
+stiller Fallback mehr. `scan_moltbook()`/`scan_brain()` loggen jetzt klar
+`"MB_REG_POST not configured — skipping"` und tun nichts, wenn die Variable
+fehlt. Workflow (`village-heartbeat.yml`) liest sie neu aus
+`${{ vars.MB_REG_POST }}` (Repo-Variable, kein Secret — öffentliche Post-ID).
+Commit `158486f`, gepusht.
+
+### Verify-Challenge — Kims Kern-Verdacht bestätigt
+
+**Befund: Ja, automatisches Posten schlägt vermutlich fehl. Die
+Challenge-Behandlung fehlt komplett im migrierten Code.**
+
+Test durchgeführt auf einem Wegwerf-Post (nicht dem echten Registrierungspost),
+über die echte Moltbook-API, mit dem hermes-sankhya-25-Account-Key:
+
+1. `grep -rn "verify|challenge|math" village/*.py` → **keine Treffer.** Der
+   migrierte Code (`heartbeat.py`, `brain.py`, `nadi_bridge.py`) enthält keine
+   Logik, die auf eine Verify-Challenge reagiert.
+2. Testpost erstellt (`POST /api/v1/posts`) → Antwort enthielt sofort ein
+   `verification`-Objekt: verschleiertes Mathe-Rätsel
+   (z. B. "...ClA w ExE rTs TwEnTy ThReE NeWtOnS...AnD...FiV e NeWtOnS...WhAt
+   Is ToTaL FoR cE?"), `verification_code`, `expires_at` (5 Minuten Gültigkeit),
+   Anweisung: Antwort an `POST /api/v1/verify` senden.
+3. **Testkommentar** auf demselben Post (`POST /api/v1/posts/{id}/comments`)
+   — der tatsächlich relevante Pfad, den `scan_moltbook()` für Registrierungs-
+   antworten nutzt — löste **dieselbe Challenge** aus. `verification_status:
+   "pending"` im Response.
+4. Challenge manuell gelöst (`POST /api/v1/verify` mit korrekter Antwort) →
+   `"message": "Verification successful! Your comment is now published."`
+   Re-Abfrage des Kommentars zeigte `verification_status` von `"pending"` auf
+   `"verified"` gewechselt.
+5. **Schluss:** Ohne Schritt 4 bleibt ein Kommentar `pending` und ist laut
+   API-Nachricht **nicht veröffentlicht** — sichtbar nur über die eigene
+   Autor-Session, nicht für andere Nutzer, und läuft nach `expires_at` (5 Min)
+   ab. Der aktuelle `scan_moltbook()`-Code postet Registrierungs-Bestätigungen
+   und Bounty-Antworten, ruft aber nie `/api/v1/verify` auf. Diese Antworten
+   würden also erstellt, aber nie tatsächlich sichtbar/veröffentlicht.
+
+Testpost danach gelöscht (`DELETE /api/v1/posts/{id}`, `200 "Post deleted"`).
+
+**Was fehlt, konkret:** Response-Parsing für `verification`/`verification_code`
+im `_mb()`-POST-Pfad, ein Löser für den (offenbar zufällig generierten, aber
+simplen additiven) Mathe-Text, und ein zusätzlicher `POST /api/v1/verify`-Call
+direkt nach jedem `posts/{id}/comments`-POST. **Nicht gebaut.** Proof 1 kann
+mit dem aktuellen Code nicht funktionieren, auch mit korrektem MB_REG_POST
+und gesetzten Secrets nicht.
