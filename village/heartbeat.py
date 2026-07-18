@@ -23,6 +23,7 @@ BOUNTIES = DIR / "bounties.json"
 STATE = DIR / "state.json"
 PROC_GH = DIR / "processed_issues.json"
 PROC_MB = DIR / "processed_comments.json"
+CHALLENGE_STATE = DIR / "challenge_failures.json"
 
 GH = os.environ.get("GITHUB_TOKEN", "") or os.environ.get("GH_TOKEN", "")
 MB = ""
@@ -75,20 +76,61 @@ def _mb(path, method="GET", body=None):
     return _api(f"https://www.moltbook.com/api/v1/{path}", MB, body, method)
 
 
+def _load_challenge_monitor_state() -> None:
+    """Restore ChallengeMonitor counters from data/village/challenge_failures.json
+    at the start of a heartbeat run, so BAN_THRESHOLD (10) can accumulate
+    across cycles instead of resetting every fresh process. See
+    docs/BEFUND.md §9."""
+    from village.moltbook_captcha import get_challenge_monitor
+
+    state = _load(CHALLENGE_STATE)
+    if state:
+        get_challenge_monitor().load_state(state)
+
+
+def _save_challenge_monitor_state() -> None:
+    """Persist ChallengeMonitor counters at the end of a heartbeat run.
+    If consecutive_failures has reached BAN_THRESHOLD, sets a sticky
+    "banned" flag and emits a GitHub Actions ::error:: annotation. Does
+    NOT disable the workflow itself — that stays a human decision. Once
+    "banned" is set it is never cleared automatically, even by a later
+    success; only a manual edit of the state file clears it."""
+    from village.moltbook_captcha import ChallengeMonitor, get_challenge_monitor
+
+    monitor = get_challenge_monitor()
+    prev = _load(CHALLENGE_STATE)
+    state = monitor.to_state()
+    state["banned"] = bool(prev.get("banned", False))
+    if state["consecutive_failures"] >= ChallengeMonitor.BAN_THRESHOLD and not state["banned"]:
+        state["banned"] = True
+        print(
+            f"::error::Challenge monitor reached BAN_THRESHOLD "
+            f"({ChallengeMonitor.BAN_THRESHOLD}) consecutive failures across "
+            f"cycles. Registration/bounty comments will be refused until "
+            f"{CHALLENGE_STATE} is manually reset (set banned:false or delete it)."
+        )
+    _save(CHALLENGE_STATE, state)
+
+
 def _post_comment_verified(post_id: str, content: str, parent_id: str | None = None) -> dict:
     """Post a Moltbook comment and, if it triggers a verify challenge
     (see docs/BEFUND.md §3), solve it automatically via
     village/moltbook_captcha.py and submit the answer before the comment
     counts as done.
 
-    Skips posting entirely — does not even attempt the comment — if the
-    ChallengeMonitor is already halted (5+ consecutive failures this
-    process). Each `python3 village/heartbeat.py` run is a fresh process
-    on a fresh GitHub Actions runner, so this halt only applies within a
-    single 15-minute cycle; see docs/BEFUND.md §8 for the cross-cycle
-    ban-threshold discussion (not implemented, proposal only).
+    Two halt layers:
+    1. In-process: ChallengeMonitor.is_halted (5+ consecutive failures
+       this run — resets every fresh process/cycle).
+    2. Cross-cycle: the persisted "banned" flag in challenge_failures.json
+       (10+ consecutive failures accumulated across runs — see
+       _save_challenge_monitor_state(), docs/BEFUND.md §9). Checked first,
+       since it should block even before this cycle's monitor is consulted.
     """
     from village.moltbook_captcha import get_challenge_monitor, solve_and_verify
+
+    if _load(CHALLENGE_STATE).get("banned"):
+        print(f"  [mb] challenge monitor BANNED (cross-cycle, persisted) — refusing comment: {content[:50]!r}")
+        return {"posted": False, "reason": "banned_cross_cycle"}
 
     monitor = get_challenge_monitor()
     if monitor.is_halted:
@@ -296,10 +338,17 @@ def scan_moltbook() -> int:
         cid = cmt.get("id", "")
         if cid in proc:
             continue
-        proc.add(cid)
         text = cmt.get("content", "")
         author = cmt.get("author", {})
         sender = author.get("name", "?")
+
+        # Retry policy (Option A, docs/BEFUND.md §8/§9): cid is only added
+        # to `proc` (marked done, never seen again) once a verify-gated
+        # reply is confirmed verified, or there was nothing to verify in
+        # the first place. If the reply's challenge fails/is skipped, cid
+        # is left OUT of proc so this same comment is retried next cycle.
+        # dex_register()/bounty_claim()/bounty_complete() are idempotent
+        # (dup checks), so re-running them on retry is safe.
 
         # --- Registration intent ---
         if any(kw in text.lower() for kw in ["join", "register", "sign up", "add me"]):
@@ -307,14 +356,21 @@ def scan_moltbook() -> int:
             name = m.group(1).strip() if m else sender
             ident = dex_register(name)
             if ident.get("_dup"):
+                # Already registered under this name — nothing left to
+                # retry, no reply was ever attempted for this comment.
+                proc.add(cid)
                 continue
-            _post_comment_verified(
+            result = _post_comment_verified(
                 REG_POST,
                 f"🦞 **{name}** registered! {ident['element']}/{ident['zone']}/{ident['guardian']}. Pop: {_load(POKEDEX).get('total',0)} | Open bounties: {len(bounty_list())}",
                 parent_id=cid,
             )
-            c += 1
-            print(f"  [mb] reg {name} via {sender}")
+            if result.get("verified"):
+                proc.add(cid)
+                c += 1
+                print(f"  [mb] reg {name} via {sender}")
+            else:
+                print(f"  [mb] reg {name} via {sender} — reply not verified ({result.get('reason')}), retrying next cycle")
             continue
 
         # --- Bounty claim ---
@@ -323,19 +379,27 @@ def scan_moltbook() -> int:
             bid = m.group(1)
             result = bounty_claim(bid, sender)
             if result:
-                _post_comment_verified(
+                reply = _post_comment_verified(
                     REG_POST,
                     f"🦞 **{sender}** claimed bounty `{bid}`: {result['title']}",
                     parent_id=cid,
                 )
-                c += 1
-                print(f"  [mb] bounty {bid} claimed by {sender}")
+                if reply.get("verified"):
+                    proc.add(cid)
+                    c += 1
+                    print(f"  [mb] bounty {bid} claimed by {sender}")
+                else:
+                    print(f"  [mb] bounty {bid} claim reply not verified ({reply.get('reason')}), retrying next cycle")
             else:
-                _post_comment_verified(
+                reply = _post_comment_verified(
                     REG_POST,
                     f"❌ Bounty `{bid}` not available (already claimed or not found).",
                     parent_id=cid,
                 )
+                if reply.get("verified"):
+                    proc.add(cid)
+                else:
+                    print(f"  [mb] bounty {bid} rejection reply not verified ({reply.get('reason')}), retrying next cycle")
             continue
 
         # --- Bounty done ---
@@ -344,14 +408,26 @@ def scan_moltbook() -> int:
             bid = m.group(1)
             result = bounty_complete(bid)
             if result:
-                _post_comment_verified(
+                reply = _post_comment_verified(
                     REG_POST,
                     f"✅ Bounty `{bid}` complete: {result['title']} — claimed by {result['claimed_by']}",
                     parent_id=cid,
                 )
-                c += 1
-                print(f"  [mb] bounty {bid} done by {sender}")
+                if reply.get("verified"):
+                    proc.add(cid)
+                    c += 1
+                    print(f"  [mb] bounty {bid} done by {sender}")
+                else:
+                    print(f"  [mb] bounty {bid} done reply not verified ({reply.get('reason')}), retrying next cycle")
+            else:
+                # bounty_complete() found nothing to complete — no reply
+                # attempted, nothing to retry.
+                proc.add(cid)
             continue
+
+        # No recognized intent in this comment — nothing to act on, never
+        # needs to be retried.
+        proc.add(cid)
 
     _save(PROC_MB, {"comment_ids": list(proc)})
     return c
@@ -395,15 +471,23 @@ def scan_brain() -> int:
                 )
                 issue = create_issue(GH, REPO, title, body, ["village-request", kind])
                 if issue:
+                    # Mark done immediately, BEFORE attempting the reply:
+                    # create_issue() is NOT idempotent (no dup check), so
+                    # unlike registration/bounty actions this must not be
+                    # retried — retrying would create duplicate GitHub
+                    # issues. The reply notification itself is therefore
+                    # best-effort, not retried, if its challenge fails.
                     brain_proc.setdefault("issues", {})[cid] = issue.get("number", 0)
                     _save(DIR / "brain_processed.json", brain_proc)
-                    _post_comment_verified(
+                    reply = _post_comment_verified(
                         REG_POST,
                         f"🧠 **Brain:** Created issue #{issue.get('number')} — {title}",
                         parent_id=cid,
                     )
                     c += 1
                     print(f"  [brain] Issue #{issue.get('number')}: {title}")
+                    if not reply.get("verified"):
+                        print(f"  [brain] notification reply not verified ({reply.get('reason')}) — not retried, issue already created")
         except ImportError:
             pass
 
@@ -428,9 +512,11 @@ def update_state():
 # ── Main ─────────────────────────────────────────────────
 def heartbeat():
     print(f"=== Village Heartbeat === {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    _load_challenge_monitor_state()
     gh = scan_github()
     mb = scan_moltbook()
     br = scan_brain()
+    _save_challenge_monitor_state()
     nadi = 0
     # NADI stays disconnected until Proof 4 is explicitly approved (see
     # docs/ARCHITECTURE_VISION.md §12, docs/BEFUND.md). Code moved here

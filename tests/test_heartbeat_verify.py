@@ -1,11 +1,11 @@
 """
-Tests for the verify-flow wiring in village/heartbeat.py::_post_comment_verified.
+Tests for the verify-flow wiring in village/heartbeat.py::_post_comment_verified
+and the cross-cycle ban persistence added in BEFUND.md §9.
 
 Not a live test — mocks village.heartbeat._mb and
-village.moltbook_captcha.get_challenge_monitor/solve_and_verify. Covers:
-comment with no challenge, comment that gets verified, comment where the
-monitor is already halted (must not even attempt the post), and a failed
-post (no comment in response).
+village.moltbook_captcha.get_challenge_monitor/solve_and_verify. Every test
+redirects CHALLENGE_STATE to a tmp_path file so no test depends on or
+pollutes the real data/village/challenge_failures.json.
 """
 
 from __future__ import annotations
@@ -14,7 +14,8 @@ import village.heartbeat as hb
 import village.moltbook_captcha as mc
 
 
-def test_no_challenge_triggered(monkeypatch):
+def test_no_challenge_triggered(monkeypatch, tmp_path):
+    monkeypatch.setattr(hb, "CHALLENGE_STATE", tmp_path / "challenge_failures.json")
     monkeypatch.setattr(hb, "_mb", lambda path, method="GET", body=None: {
         "success": True,
         "comment": {"id": "c1", "content": "hi"},
@@ -23,7 +24,8 @@ def test_no_challenge_triggered(monkeypatch):
     assert result == {"posted": True, "verified": True}
 
 
-def test_challenge_solved(monkeypatch):
+def test_challenge_solved(monkeypatch, tmp_path):
+    monkeypatch.setattr(hb, "CHALLENGE_STATE", tmp_path / "challenge_failures.json")
     calls = []
 
     def fake_mb(path, method="GET", body=None):
@@ -55,7 +57,8 @@ def test_challenge_solved(monkeypatch):
     assert any(c[0] == "verify" for c in calls)
 
 
-def test_halted_monitor_skips_post_entirely(monkeypatch):
+def test_halted_monitor_skips_post_entirely(monkeypatch, tmp_path):
+    monkeypatch.setattr(hb, "CHALLENGE_STATE", tmp_path / "challenge_failures.json")
     calls = []
 
     def fake_mb(path, method="GET", body=None):
@@ -73,8 +76,80 @@ def test_halted_monitor_skips_post_entirely(monkeypatch):
     assert calls == []  # _mb never called — no comment attempt at all
 
 
-def test_post_failure_returns_not_posted(monkeypatch):
+def test_post_failure_returns_not_posted(monkeypatch, tmp_path):
+    monkeypatch.setattr(hb, "CHALLENGE_STATE", tmp_path / "challenge_failures.json")
     monkeypatch.setattr(hb, "_mb", lambda path, method="GET", body=None: None)
     result = hb._post_comment_verified("post123", "x", parent_id="c0")
     assert result["posted"] is False
     assert result["reason"] == "post_failed"
+
+
+# =============================================================================
+# Cross-cycle ban persistence (BEFUND.md §9)
+# =============================================================================
+
+
+def test_banned_state_blocks_post_without_calling_mb(monkeypatch, tmp_path):
+    state_path = tmp_path / "challenge_failures.json"
+    state_path.write_text('{"banned": true, "consecutive_failures": 10}')
+    monkeypatch.setattr(hb, "CHALLENGE_STATE", state_path)
+
+    calls = []
+    monkeypatch.setattr(hb, "_mb", lambda *a, **k: calls.append(a) or {"success": True})
+
+    result = hb._post_comment_verified("post123", "x", parent_id="c0")
+    assert result == {"posted": False, "reason": "banned_cross_cycle"}
+    assert calls == []
+
+
+def test_save_sets_banned_and_logs_error_at_threshold(monkeypatch, tmp_path, capsys):
+    state_path = tmp_path / "challenge_failures.json"
+    monkeypatch.setattr(hb, "CHALLENGE_STATE", state_path)
+
+    monitor = mc.ChallengeMonitor()
+    monitor._consecutive_failures = mc.ChallengeMonitor.BAN_THRESHOLD
+    monitor._total_attempts = 10
+    monitor._total_failures = 10
+    monkeypatch.setattr(mc, "_challenge_monitor", monitor)
+
+    hb._save_challenge_monitor_state()
+
+    saved = hb._load(state_path)
+    assert saved["banned"] is True
+    assert saved["consecutive_failures"] == mc.ChallengeMonitor.BAN_THRESHOLD
+    captured = capsys.readouterr()
+    assert "::error::" in captured.out
+    assert "BAN_THRESHOLD" in captured.out
+
+
+def test_banned_flag_sticky_across_a_later_success(monkeypatch, tmp_path):
+    """Once banned, a subsequent save with fewer consecutive_failures
+    (e.g. after one success reset the in-process counter) must NOT clear
+    it automatically — only a manual edit of the file should."""
+    state_path = tmp_path / "challenge_failures.json"
+    state_path.write_text('{"banned": true, "consecutive_failures": 10}')
+    monkeypatch.setattr(hb, "CHALLENGE_STATE", state_path)
+
+    monitor = mc.ChallengeMonitor()
+    monitor._consecutive_failures = 0  # as if a success just reset it
+    monkeypatch.setattr(mc, "_challenge_monitor", monitor)
+
+    hb._save_challenge_monitor_state()
+
+    saved = hb._load(state_path)
+    assert saved["banned"] is True  # still banned — sticky
+
+
+def test_load_state_restores_monitor_counters(monkeypatch, tmp_path):
+    state_path = tmp_path / "challenge_failures.json"
+    state_path.write_text('{"consecutive_failures": 3, "total_attempts": 7, "total_successes": 4, "total_failures": 3, "halted": false}')
+    monkeypatch.setattr(hb, "CHALLENGE_STATE", state_path)
+
+    fresh_monitor = mc.ChallengeMonitor()
+    monkeypatch.setattr(mc, "_challenge_monitor", fresh_monitor)
+
+    hb._load_challenge_monitor_state()
+
+    stats = mc.get_challenge_monitor().get_stats()
+    assert stats["consecutive_failures"] == 3
+    assert stats["total_attempts"] == 7

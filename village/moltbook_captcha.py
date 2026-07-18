@@ -148,6 +148,33 @@ class ChallengeMonitor:
             "halted": self._halted,
         }
 
+    def to_state(self) -> dict:
+        """Serialize counters for cross-process/cross-cycle persistence.
+
+        New code, not ported — the source ChallengeMonitor was designed for
+        a long-running daemon process where in-memory state is enough. Each
+        village heartbeat run is a fresh process, so BAN_THRESHOLD (10)
+        can only be meaningfully enforced across cycles if something
+        outside this class persists and restores these counters. See
+        village/heartbeat.py's challenge_failures.json handling and
+        docs/BEFUND.md §8/§9.
+        """
+        return {
+            "consecutive_failures": self._consecutive_failures,
+            "total_attempts": self._total_attempts,
+            "total_successes": self._total_successes,
+            "total_failures": self._total_failures,
+            "halted": self._halted,
+        }
+
+    def load_state(self, state: dict) -> None:
+        """Restore counters from a persisted dict. See to_state()."""
+        self._consecutive_failures = state.get("consecutive_failures", 0)
+        self._total_attempts = state.get("total_attempts", 0)
+        self._total_successes = state.get("total_successes", 0)
+        self._total_failures = state.get("total_failures", 0)
+        self._halted = state.get("halted", False)
+
 
 # Module-level singleton — shared across all client instances, matching source.
 _challenge_monitor = ChallengeMonitor()
