@@ -15,8 +15,8 @@ import urllib.request
 from pathlib import Path
 
 # ── Config ──────────────────────────────────────────────
-REPO = os.environ.get("GITHUB_REPOSITORY", "kimeisele/hermes-sankhya-25")
-VILLAGE = "hermes-sankhya-25"
+REPO = os.environ.get("GITHUB_REPOSITORY", "kimeisele/agent-village")
+VILLAGE = "agent-village"
 DIR = Path("data/village")
 POKEDEX = DIR / "pokedex.json"
 BOUNTIES = DIR / "bounties.json"
