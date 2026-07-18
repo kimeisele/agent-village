@@ -514,3 +514,24 @@ Rateversuch), greift der `ChallengeMonitor` unverändert.
 
 **Secret-Name für Kim: `DEEPSEEK_API_KEY`** (exakt dieser Name, in
 `kimeisele/agent-village` als Repo-Secret).
+
+---
+
+## §7 — Finaler Live-Test nach den Fixes (2026-07-18, ~20:00 UTC)
+
+Wegwerf-Post erstellt (`post_id=7c8a57db-...`), Challenge automatisch gelöst
+via `solve_and_verify()` (deterministisch, `used_llm_fallback: false`),
+`POST /api/v1/verify` automatisch aufgerufen, Post danach gelöscht.
+
+**Ergebnis: Erfolg.** Challenge: `"...LooOobSstTeR ClAw FoRcE iS tHiRtY
+fIvvEe NeUwToNs + LaRgeR ClAw FoRcE iS TwEnTy TwO NeUtoNs, HoW MuCh ToTaL
+FoRcE..."` → 35 + 22 = 57. Solver antwortete `57.00`. API: `"success": true,
+"message": "Verification successful! Your post is now published."`
+Nachkontrolle (`GET /posts/{id}`) bestätigt `verification_status: "verified"`.
+ChallengeMonitor: `total_attempts: 1, total_successes: 1, total_failures: 0`.
+
+Post danach gelöscht (`200 "Post deleted"`).
+
+**Damit ist der geforderte Nachweis "kann automatisiert korrekt lösen" jetzt
+tatsächlich erbracht** — im Gegensatz zum vorherigen Versuch in §5, der mit
+falscher Antwort scheiterte.
