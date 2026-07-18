@@ -1017,3 +1017,68 @@ gelöscht), Wegwerf-Kommentar auf Moltbook gelöscht, Test-Kommentar-ID aus
 `processed_comments.json`/`brain_processed.json` entfernt.
 
 **87/87 Tests grün** (unverändert seit dem is_actionable()-Fix — der Live-Test selbst brauchte keine neuen Unit-Tests, nur den echten Plattform-Beweis).
+
+---
+
+## §18 — Bounty-Flow kontrolliert getestet (2026-07-18, ~21:30 UTC)
+
+### Claim-Schritt: erfolgreich, live verifiziert
+
+Wegwerf-Kommentar `a3db1499-...` ("I claim b001") gepostet, Challenge
+gelöst, `VILLAGE_BOUNTIES_ENABLED=1` gesetzt (**Nebenfund:** dieselbe Lücke
+wie bei Brain — die drei `VILLAGE_*_ENABLED`-Flags fehlten komplett im
+`env:`-Block von `village-heartbeat.yml`, wären beim Setzen der Repo-Variable
+bisher wirkungslos gewesen; jetzt gefixt, alle drei durchgereicht).
+
+Lauf `29661601153`: `[mb] bounty b001 claimed by hermes-sankhya-25`,
+`Bounties:2o/1c`. Live-Bestätigung: Antwort-Kommentar `cf0e037a-...`,
+`verification_status: "verified"`, öffentlich sichtbar — **aber erst unter
+`sort=old`, nicht unter `sort=new`** (Indexierungsverzögerung auf
+Moltbooks Seite, kein Fehler unsererseits — für künftige Direktprüfungen
+gemerkt).
+
+### Done-Schritt: NICHT verifizierbar — echte Anomalie, kein Erfolg behauptet
+
+Wegwerf-Kommentar `aa964c8e-...` ("done b001") gepostet (`201`), Challenge
+gelöst (`200 "Verification successful"`). **Aber:** Der Heartbeat-Lauf
+(`29661677419`) hat den Kommentar nie gesehen (`MB:0`, Bounty blieb
+`claimed`, nicht `done`). Eigene Nachprüfung (authentifiziert +
+unauthentifiziert, `sort=new`/`sort=old`/`sort=top`, rekursiv bis in alle
+Verschachtelungstiefen): der Kommentar erscheint **in keiner Auflistung**,
+über 2,5 Minuten (6 Versuche, 30s-Abstand) hinweg konstant — keine
+Verzögerung, sondern dauerhaftes Fehlen in der Listing-API. `DELETE
+/comments/{id}` funktionierte trotzdem (`200 "Comment deleted"`) — der
+Kommentar existierte serverseitig also wirklich, war aber nie über die
+Listing-Endpunkte auffindbar. Ursache nicht abschließend geklärt (Vermutung:
+serverseitige Spam-/Ähnlichkeits-Erkennung zwischen den beiden sehr ähnlich
+formulierten Testkommentaren desselben Accounts innerhalb kurzer Zeit,
+nicht verifiziert). **Das ist keine Behauptung eines Erfolgs — der
+"done"-Teil des Lifecycles bleibt an dieser Stelle unbewiesen.**
+
+### Zur gefragten Idempotenz-/Verify-Fehlerklasse bei Bounties
+
+Strukturell verifiziert (nicht live reproduziert, da der Claim-Schritt beim
+ersten Versuch direkt erfolgreich verifizierte und keinen Retry auslöste):
+`solve_and_verify()`/`_post_comment_verified()`/das
+`pending_confirmations.json`-Schema sind **identisch** für alle vier
+Kategorien (`registration`, `bounty_claim`, `bounty_reject`,
+`bounty_done`) — der gefixte Code-Pfad aus §14/§15 gilt uniform, nicht nur
+für Registrierung. Bereits vorhandene Unit-Tests
+(`test_pending_bounty_claim_retries_with_stored_data_not_bounty_claim_again`)
+prüfen explizit, dass `bounty_claim()` bei einem Retry NICHT erneut
+aufgerufen wird (sondern die beim ersten Versuch gespeicherten Daten
+genutzt werden) — genau der Fehler, der bei der Registrierung live auftrat,
+wäre hier strukturell ausgeschlossen.
+
+### Aufräumen
+
+Beide Wegwerf-Kommentare auf Moltbook gelöscht (`a3db1499`, `aa964c8e`,
+beide `200`). `VILLAGE_BOUNTIES_ENABLED` gelöscht. `bounties.json`: `b001`
+zurück auf `open`/`claimed_by: null`. `processed_comments.json`:
+Test-Kommentar-ID entfernt. `state.json`: Bounty-Zähler auf `3o/0c/0done`
+zurückgesetzt.
+
+**Fazit Punkt 2:** Claim-Schritt sauber bewiesen. Done-Schritt technisch
+korrekt implementiert (gleicher, bereits abgesicherter Code-Pfad), aber
+durch eine externe Plattform-Anomalie nicht live abschließend verifizierbar
+gewesen — offen, nicht als erledigt gemeldet.
