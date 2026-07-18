@@ -418,3 +418,42 @@ CaptchaChamber-Solve (inkl. LOBSTER_CAPTCHA) + 3 Confidence + 5 Pipeline +
 (Sample 3, Sample 5 — Ursache oben dokumentiert, kein Blocker für den
 Live-Test, da die anderen 3 Samples inkl. des Original-Lobster-Fixtures
 sauber durchlaufen).
+
+### End-to-End-Live-Test (automatisiert, Punkt 3 des Auftrags)
+
+Wegwerf-Post erstellt (`post_id=14d1943b-...`), Challenge automatisch via
+`solve_and_verify()` gelöst (nicht manuell), `POST /api/v1/verify` automatisch
+aufgerufen, Post danach gelöscht. Vollständige rohe Ein-/Ausgabe im Chat
+dokumentiert (2026-07-18 ~19:47 UTC).
+
+**Ergebnis: Verify wurde von der API abgelehnt (`400 Incorrect answer`).**
+
+Die live gezogene Challenge war diesmal eine **Subtraktion**, nicht Addition:
+`"...has claw force of forty two newtons but it looses twelve newtons, how
+many now?"` → korrekt wäre 42 − 12 = **30.00** (eigene Handrechnung, von der
+API nicht bestätigt — sie verrät die richtige Antwort nicht). Der Solver
+antwortete **28.00** und lag falsch.
+
+Ursache: Nur `_strategy_direct` lieferte überhaupt einen Kandidaten (Score
+3.55, klar über der Schwelle) — `exact`/`collapse`/`aggressive` fanden bei
+diesem stärker verschleierten Text (inkl. Ablenkungs-Text vor der eigentlichen
+Rechnung: "lobster rans like a bit off the erg um mmm...") gar nichts. Zudem:
+**"loses"/"looses" ist in keiner der Operator-Wortlisten als
+Subtraktions-Signal hinterlegt** (`OPERATOR_MAP`/`_EXP_MINUS` kennen nur
+"minus"/"subtract"/"difference") — eine weitere, hier live entdeckte
+Vokabellücke, zusätzlich zu der in §5 oben dokumentierten "and"/"gains"-Lücke.
+
+**Damit bestätigt sich am echten System dieselbe Problemklasse wie bei den
+Offline-Samples 3/5: das System liefert bei unvollständiger/unüblicher
+Formulierung nicht `None` (sicher überspringen), sondern eine falsche,
+scheinbar konfidente Antwort.** ChallengeMonitor verzeichnet das korrekt als
+Fehlschlag (`total_failures: 1, consecutive_failures: 1`, noch nicht halted).
+
+**Damit ist der geforderte Nachweis "kann automatisiert gelöst werden"
+NICHT sauber erbracht** — die Automatisierung selbst funktioniert technisch
+einwandfrei (Post erstellen → Challenge lesen → lösen → verify aufrufen →
+Ergebnis auswerten, alles ohne manuellen Eingriff), aber die *Lösung* war
+in diesem Live-Versuch falsch. Ein zweiter Testlauf mit einer einfacheren,
+addition-basierten Challenge hätte vermutlich funktioniert (wie bei den
+Offline-Samples 1/2/4), aber das würde das eigentliche Coverage-Problem nur
+verdecken, nicht beheben.
