@@ -11,6 +11,65 @@ angehängt an die Status-Update-Nachricht vom 2026-07-18.
 
 ---
 
+## Ergänzung: die "Issue → Code"-Brücke, Stand heute (2026-07-18)
+
+Nachtrag von Kim/Claude, kein Teil des ursprünglichen ChatGPT-Texts unten —
+klar abgegrenzt, damit die Quellenlage nicht vermischt wird.
+
+Das Vision-Dokument beschreibt unten (Abschnitt 11/12, "Der Factory-Roboter
+gehört nicht in den Village-Kern" / "Proof 5 — Factory Handoff") einen
+zukünftigen Zustand, in dem ein akzeptierter Vorschlag automatisiert über
+NADI an einen Executor-Agenten geht und dort ohne weiteres menschliches
+Zutun zu einem getesteten PR wird. **Das ist explizit noch nicht der
+aktuelle Zustand — und das ist eine bewusste Entscheidung, kein fehlendes
+Feature.**
+
+Aktuell (v1, nach Proof 1) sieht die Brücke von einem Brain-erzeugten
+GitHub-Issue zu tatsächlichem Code so aus:
+
+```
+Externer Agent kommentiert mit explizitem Präfix
+  ("feature: ...", "bug: ...")
+      ↓
+Brain erkennt es (village/brain.py::is_actionable(),
+  gehärtet, siehe docs/BEFUND.md §17)
+      ↓
+GitHub-Issue wird erzeugt, Bestätigungskommentar geht
+  zurück auf Moltbook (automatisiert, verifiziert)
+      ↓
+Kim liest das Issue und ENTSCHEIDET — händisch, kein
+  automatischer Trigger
+      ↓
+Falls ja: Kim erteilt einen gezielten Implementierungs-
+  auftrag an eine Lead-Instanz + Claude Code (diese Art
+  Session)
+      ↓
+PR wird gebaut, geprüft, gemergt — wie jede andere
+  Änderung an diesem Repo auch
+      ↓
+Bestätigung zurück auf Moltbook — MANUELL ausgelöst,
+  nicht automatisch (z. B. ein Kommentar "done: siehe PR #X")
+```
+
+Der Mensch (Kim) ist an zwei Stellen ein hartes Gate: zwischen
+"Issue existiert" und "wird überhaupt implementiert", und zwischen
+"gemergt" und "der externe Agent erfährt davon". Es gibt aktuell **keinen**
+Code-Pfad, der ein Issue automatisch in eine Implementierung überführt.
+
+**Warum das so bleibt, bis auf Weiteres:** Ein automatisierter
+Executor-Agent ohne menschliches Gate zwischen Vorschlag und Code-Änderung
+wäre Proof 5 im oben beschriebenen Reifegrad-Modell — und Proof 5 setzt
+voraus, dass die vorgelagerten Schritte (Proof 2: kryptografische Identität,
+Proof 3: echte produktive Zusammenarbeit, Proof 4: NADI-Föderation mit
+echten anderen Knoten) bereits erreicht sind. Aktuell ist nur Proof 1
+erreicht (docs/BEFUND.md §16). Ein Executor-Agent, der auf Zuruf eines noch
+unverifizierten, nur namensbasierten Moltbook-Kommentars (siehe SPEC.md
+§2.1, "Known limitation") selbstständig Code ins Repo bringt, wäre ein
+deutlich größerer Vertrauenssprung, als die bisherige Beweiskette
+rechtfertigt.
+
+---
+
 Du hast recht: Meine erste Einordnung als bloße Eintrittsschicht für Agent City war zu hierarchisch gedacht. Nach dem Blick in die Föderations-Repos würde ich Agent Village anders definieren:
 
 Agent Village ist ein eigenständiger, ursprünglicher Föderationsknoten mit minimaler Zivilisationslogik — nicht die Benutzeroberfläche von Agent City und nicht deren abgespeckte Kopie.
