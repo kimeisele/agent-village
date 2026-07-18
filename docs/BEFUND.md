@@ -245,3 +245,73 @@ simplen additiven) Mathe-Text, und ein zusätzlicher `POST /api/v1/verify`-Call
 direkt nach jedem `posts/{id}/comments`-POST. **Nicht gebaut.** Proof 1 kann
 mit dem aktuellen Code nicht funktionieren, auch mit korrektem MB_REG_POST
 und gesetzten Secrets nicht.
+
+---
+
+## §4 — Referenz-Recherche + Challenge-Samples (2026-07-18, ~19:30 UTC)
+
+### Agent City — wie löst sie Verify-Challenges? (read-only, nur zu diesem Zweck erlaubt)
+
+Nur `kimeisele/agent-city` gelesen (flacher Klon in Scratchpad, nicht committet/gepusht,
+keine Änderung). **Kein drittes Repo angerührt.**
+
+- `city/moltbook_client.py` — reiner HTTP-Wrapper. `comment_with_verification()`
+  ruft `self._client.sync_comment_with_verification(...)` auf. Laut Docstring
+  in der Klasse (`MoltbookClient.__init__`): `client: the underlying
+  MoltbookClient from steward-protocol`.
+- `grep -rn "verify|captcha|challenge" city/moltbook_*.py city/hooks/*/moltbook_*.py`
+  → **keine Treffer.** Agent City selbst enthält keine einzige Zeile
+  Challenge-Löse-Logik.
+- `city/net_retry.py` (generischer Retry-Wrapper, den `moltbook_client.py`
+  nutzt) → ebenfalls keine Verify-Logik, nur Fehlerbehandlung/Backoff.
+- **Schluss: Die eigentliche Verify-Lösung — ob deterministisch oder LLM —
+  liegt vollständig in `steward-protocol`, nicht in `agent-city`.**
+  `pip show -f steward-protocol` zeigt: lokal als *editable install*
+  installiert, `Editable project location: /Users/ss/projects/steward-protocol`
+  — ein echter Checkout dieses Repos liegt auf der Maschine.
+  **Ich habe dort nichts gelesen.** Kim hat explizit nur `agent-city`
+  freigegeben. Wenn die konkrete Lösung (deterministisch vs. LLM, welches
+  Secret) geklärt werden soll, braucht es eine explizite Freigabe für
+  `steward-protocol` (oder Kim beschreibt den Vertrag direkt).
+
+### Challenge-Samples (5 insgesamt, alle über Wegwerf-Posts/-Kommentare erzeugt,
+### danach gelöscht — Rohtext, unverändert)
+
+1. **Post**, ursprünglicher Test (§3):
+   `"A] lOoObBsStTeErR ]sW/iMmS [iN tHe ]coOl WaTeR, Um] cLaW F oR cE Is/ tWeNtY ]fIvE {nEeWtOoNs, PlUs} FiFfTeEeN <nOoToNs> - hOw] mUcH ToTaL FoR cE^?"`
+   → 25 + 15 = **40.00**
+
+2. **Kommentar**, ursprünglicher Test (§3):
+   `"A] LoBbEr'S ClA w ExE rTs TwEnTy ThReE NeWtOnS ^ AnD An TeNnA ToUcH AdD s FiV e NeWtOnS ~, Um LlOoObBsStEeR PhYySxIcS Lo.oBb St Er, WhAt Is ToTaL FoR cE?"`
+   → 23 + 5 = **28.00**
+
+3. **Post**, dieser Recon-Auftrag:
+   `"A] lO b-StEr SwIm S aT tW/eN tY sE vEn CeN tI mEt ErS PeR Se Co Nd - AnD^ aCcEeLeR aTeS bY[ fIiV e, WhAtS tHe NeW VeLoOciTyYY?"`
+   → 27 + 5 = **32.00**
+
+4. **Post**, dieser Recon-Auftrag:
+   `"A] Lo.OoBbSsStTeErR- ClAw^ FoOrRcCeE ThIrTy FiVe NeWToNs ~ DuRiNg DoMiNaNcE FiGhT, AnD ] AnOtHeR Lo.oBbSsStTeErR- ClAw^ TwEnTy TwO NeWToNs, WhAt Is ThE ToTaL FoRcE?"`
+   → 35 + 22 = **57.00**
+
+5. **Post**, dieser Recon-Auftrag:
+   `"Lo]oBbSsTtEeR S^wIiMmS/ aT tW/eNnTy ThReE {mEeTtEeR}s PeR sEeCcOoNnD ~aNd/ GgAaIiNnSs {SsEeVvEeN} mEeTtEeR}s PeR sEeCcOoNnD, WwHhAaTt'S TtHhEe NnEeWw VvEeLlOoOcCiItTy?"`
+   → 23 + 7 = **30.00**
+
+### Muster-Beobachtung über alle 5 Samples
+
+- Immer dasselbe Grundthema: "Lobster"-Physik (Zangenkraft/Schwimmgeschwindigkeit).
+- Immer eine **einfache Addition zweier Zahlen** — keine Subtraktion, Multiplikation
+  oder Mehrschritt-Rechnung in keinem der 5 Samples.
+- Zahlen immer als **ausgeschriebene Wörter** ("twenty five", "fifteen") in den
+  Text eingebettet, nie als Ziffern.
+- Verschleierung: zufälliges Groß-/Kleinschreibungs-Alternieren pro Zeichen,
+  plus verstreute Sonderzeichen (`]`, `[`, `^`, `~`, `{`, `}`, `/`, `.`,
+  Leerzeichen mitten im Wort) — Muster nicht identisch zwischen den Samples,
+  wirkt zufällig generiert, aber Wortgrenzen bleiben grundsätzlich erkennbar.
+- Antwortformat konstant: `"X.00"`, zwei Nachkommastellen, hier immer `.00`
+  (da beide Operanden ganzzahlig), Instruktionstext ist wortidentisch in
+  allen 5 Samples.
+- Gültigkeitsfenster konstant: 5 Minuten (`expires_at` - `created_at`).
+- Stichprobe ist klein (n=5, alle vom selben Account, in kurzer Zeit
+  erzeugt) — keine Garantie, dass künftig auch andere Operationen
+  (Subtraktion, Multiplikation, andere Themen als "Lobster") vorkommen.
