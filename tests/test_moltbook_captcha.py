@@ -256,6 +256,17 @@ class TestRealSamples:
         )
         assert CaptchaChamber.solve(text) == "30"
 
+    def test_sample_6_live_e2e_subtraction(self):
+        """From the live automated E2E test run (docs/BEFUND.md §5 addendum):
+        the solver answered 28.00 here and the API rejected it. Correct
+        answer (own calculation, not API-confirmed): 42 - 12 = 30."""
+        text = (
+            "A] lOoObbsssTeR rAnS/ liKe- a bIt^ oFf- tHe Er?gG Um mMm hAs^ "
+            "cLaW fO rCe- oF/ fOrTy T wo] nEeWtoNs- BuT^ iT- looses[ "
+            "tWeLve] nEeWtoNs, HoW/ mAnY- nOw<?"
+        )
+        assert CaptchaChamber.solve(text) == "30"
+
 
 # =============================================================================
 # 3. solve_and_verify() — the new two-step HTTP flow, mocked
@@ -303,3 +314,82 @@ class TestSolveAndVerify:
         result = solve_and_verify(lambda *a: {}, {})
         assert result["solved"] is False
         assert result["reason"] == "malformed_verification"
+
+
+# =============================================================================
+# 4. LLM fallback — mocked, no real network call. Flag off by default.
+# =============================================================================
+
+
+class TestLlmFallback:
+    def test_disabled_by_default_stays_low_confidence(self, monkeypatch):
+        """Flag unset -> deterministic None must NOT trigger the fallback,
+        even if DEEPSEEK_API_KEY happens to be set."""
+        monkeypatch.delenv("VILLAGE_CHALLENGE_LLM_ENABLED", raising=False)
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "unused-in-this-test")
+        calls = []
+
+        def fake_mb(path, method, body):
+            calls.append((path, method, body))
+            return {"success": True}
+
+        verification = {"verification_code": "x", "challenge_text": "What color is the sky?"}
+        result = solve_and_verify(fake_mb, verification)
+        assert result["reason"] == "low_confidence"
+        assert len(calls) == 0
+
+    def test_enabled_but_no_api_key_stays_low_confidence(self, monkeypatch):
+        monkeypatch.setenv("VILLAGE_CHALLENGE_LLM_ENABLED", "1")
+        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+        verification = {"verification_code": "x", "challenge_text": "What color is the sky?"}
+        result = solve_and_verify(lambda *a: {"success": True}, verification)
+        assert result["reason"] == "low_confidence"
+
+    def test_deterministic_answer_never_calls_llm(self, monkeypatch):
+        """Deterministic solver succeeds -> _deepseek_solve must not even be
+        imported/called, flag or no flag."""
+        import village.moltbook_captcha as mc
+
+        monkeypatch.setenv("VILLAGE_CHALLENGE_LLM_ENABLED", "1")
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "unused-in-this-test")
+
+        def boom(_challenge_text):
+            raise AssertionError("_deepseek_solve must not be called when deterministic solver succeeds")
+
+        monkeypatch.setattr(mc, "_deepseek_solve", boom)
+        verification = {"verification_code": "x", "challenge_text": "What is seven + 3?"}
+        result = solve_and_verify(lambda *a: {"success": True}, verification)
+        assert result["solved"] is True
+        assert result["used_llm_fallback"] is False
+
+    def test_llm_fallback_used_when_deterministic_returns_none(self, monkeypatch):
+        import village.moltbook_captcha as mc
+
+        monkeypatch.setenv("VILLAGE_CHALLENGE_LLM_ENABLED", "1")
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "unused-in-this-test")
+        monkeypatch.setattr(mc, "_deepseek_solve", lambda challenge_text: "99")
+
+        calls = []
+
+        def fake_mb(path, method, body):
+            calls.append(body)
+            return {"success": True}
+
+        verification = {"verification_code": "x", "challenge_text": "What color is the sky?"}
+        result = solve_and_verify(fake_mb, verification)
+        assert result["solved"] is True
+        assert result["used_llm_fallback"] is True
+        assert result["answer"] == "99.00"
+        assert calls[0]["answer"] == "99.00"
+
+    def test_llm_fallback_also_none_stays_low_confidence(self, monkeypatch):
+        import village.moltbook_captcha as mc
+
+        monkeypatch.setenv("VILLAGE_CHALLENGE_LLM_ENABLED", "1")
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "unused-in-this-test")
+        monkeypatch.setattr(mc, "_deepseek_solve", lambda challenge_text: None)
+
+        calls = []
+        result = solve_and_verify(lambda *a: calls.append(a) or {"success": True}, {"verification_code": "x", "challenge_text": "gibberish"})
+        assert result["reason"] == "low_confidence"
+        assert len(calls) == 0

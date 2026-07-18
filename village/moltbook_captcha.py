@@ -44,8 +44,12 @@ from __future__ import annotations
 
 import ast
 import difflib
+import json
 import logging
+import os
 import re
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Dict, Final, List, Optional, Sequence, Tuple
 
@@ -427,9 +431,17 @@ _OPERATOR_WORDS: Final[Dict[str, str]] = {
     "times": "*", "multiply": "*",
     "divided": "/", "divide": "/",
     "modulo": "%", "mod": "%", "remainder": "%",
+    # Added after BEFUND.md §5 / live E2E test: these must be in the
+    # reconstruction vocabulary, not just _extract_math's trigger-word
+    # list — without a vocab entry, _pada_collapse/_pada_aggressive have no
+    # reason to reassemble them and they stay as unrecognized fragments
+    # (e.g. "acceeleratesby"), so the trigger-word substring check on the
+    # decoded text never finds them either.
+    "gains": "+", "gain": "+", "accelerates": "+",
+    "loses": "-", "lose": "-", "looses": "-", "decelerates": "-",
 }
 
-_CONTEXT_WORDS: Final[Tuple[str, ...]] = ("total", "combined", "altogether", "together")
+_CONTEXT_WORDS: Final[Tuple[str, ...]] = ("total", "combined", "altogether", "together", "and")
 
 # DIVERGES FROM SOURCE: source built _VOCAB_COORDS (word -> RAMA coordinate
 # tuple via encode_text) for both exact/collapsed dict-membership lookups AND
@@ -723,10 +735,16 @@ def _extract_math(decoded_text: str) -> Optional[str]:
 
     text_lower = decoded_text.lower()
 
-    _EXP_MINUS = ("minus", "subtract")
+    # "loses"/"looses" (subtraction) and "gains"/"accelerates"/"and" (addition)
+    # added after BEFUND.md §5: samples 3/5 used "and .. accelerates by" /
+    # "and gains" with no explicit operator word; a live test used "but it
+    # looses" for subtraction. "and" is listed last and only reached if no
+    # more specific word matched — kept broad per Kim's instruction, but
+    # lowest priority since it's the least specific signal.
+    _EXP_MINUS = ("minus", "subtract", "loses", "lose", "looses", "decelerates")
     _EXP_TIMES = ("times", "multiply")
     _EXP_DIV = ("divided", "divide")
-    _EXP_PLUS = ("plus", "add")
+    _EXP_PLUS = ("plus", "add", "gains", "gain", "accelerates")
     if any(w in text_lower for w in _EXP_MINUS):
         return " - ".join(numbers)
     if any(w in text_lower for w in _EXP_TIMES):
@@ -745,6 +763,13 @@ def _extract_math(decoded_text: str) -> Optional[str]:
         return " - ".join(numbers)
     if any(w in text_lower for w in _PROD):
         return " * ".join(numbers)
+
+    # Lowest-priority fallback: bare "and" with exactly two numbers and no
+    # other recognized signal. Least specific of all triggers (many
+    # sentences use "and" without meaning addition) — only reached here
+    # because everything more specific above already failed.
+    if "and" in text_lower.split():
+        return " + ".join(numbers)
 
     return None
 
@@ -882,7 +907,19 @@ def _is_number_word(word: str) -> bool:
 
 
 def _score_completeness(candidate: CaptchaCandidate, _challenge: str) -> float:
-    """Did the decoder find a sensible math structure?"""
+    """Did the decoder find a sensible math structure?
+
+    FIX (BEFUND.md §5/live E2E test): the original scoring gave 0.5 for
+    ANY found_numbers >= 1, including a single lone number with no
+    operator — an incomplete decode, not "a sensible math structure". That
+    let single-number candidates clear the 2.25/6.0 confidence threshold
+    and get submitted as confidently wrong answers instead of returning
+    None. found_numbers == 1 now scores 0.0: a real one-operand captcha
+    ("what is the number 5") is rare and, if it exists, other scorers
+    (range, decode_fidelity) plus multi-strategy consensus can still carry
+    it past the threshold — but an incomplete two-operand decode must not
+    be rewarded as if it were complete.
+    """
     text = candidate.decoded_text.lower()
     found_numbers = 0
     found_operator = False
@@ -898,8 +935,8 @@ def _score_completeness(candidate: CaptchaCandidate, _challenge: str) -> float:
 
     if found_numbers >= 2 and found_operator:
         return 1.0
-    if found_numbers >= 1:
-        return 0.5
+    if found_numbers >= 2:
+        return 0.3
     return 0.0
 
 
@@ -991,6 +1028,70 @@ class CaptchaChamber:
 
 
 # =============================================================================
+# LLM FALLBACK — new code, off by default, only consulted on CaptchaChamber
+# None (never as a double-check against a deterministic answer)
+# =============================================================================
+
+_LLM_ENABLED_FLAG = "VILLAGE_CHALLENGE_LLM_ENABLED"
+_DEEPSEEK_API_KEY_VAR = "DEEPSEEK_API_KEY"
+_DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+
+
+def _deepseek_solve(challenge_text: str) -> Optional[str]:
+    """Ask DeepSeek to solve a challenge the deterministic solver skipped.
+
+    Only ever called when CaptchaChamber.solve() already returned None —
+    see solve_and_verify() below. Returns None (not "0", not a guess) on
+    any failure: missing key, network error, unparseable response. The
+    ChallengeMonitor treats an LLM-fallback None exactly like a
+    deterministic None — a recorded failure, not a submitted answer.
+    """
+    api_key = os.environ.get(_DEEPSEEK_API_KEY_VAR, "")
+    if not api_key:
+        logger.warning("_deepseek_solve: %s not set, cannot fall back", _DEEPSEEK_API_KEY_VAR)
+        return None
+
+    prompt = (
+        "Solve this math word problem. The obfuscated text/casing is noise; "
+        "the numbers and operation are what matter. Reply with ONLY the "
+        "numeric answer, nothing else, to 2 decimal places (e.g. 42.00).\n\n"
+        f"{challenge_text}"
+    )
+    body = json.dumps(
+        {
+            "model": "deepseek-chat",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
+            "max_tokens": 20,
+        }
+    ).encode()
+    req = urllib.request.Request(
+        _DEEPSEEK_URL,
+        data=body,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            resp = json.loads(r.read())
+    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        logger.warning("_deepseek_solve: API call failed: %s", exc)
+        return None
+
+    try:
+        content = resp["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError, TypeError):
+        logger.warning("_deepseek_solve: unexpected response shape: %r", resp)
+        return None
+
+    match = re.search(r"-?\d+\.?\d*", content)
+    if not match:
+        logger.warning("_deepseek_solve: no number found in response: %r", content)
+        return None
+    return match.group(0)
+
+
+# =============================================================================
 # TWO-STEP VERIFY FLOW — new code, adapted to the current live API contract
 # (not ported — see module docstring for the discrepancy from source)
 # =============================================================================
@@ -1008,8 +1109,16 @@ def solve_and_verify(mb_call, verification: dict) -> dict:
             and `challenge_text` (see agent-village/docs/BEFUND.md §3 for the
             exact response shape observed live).
 
+    If CaptchaChamber.solve() returns None AND the VILLAGE_CHALLENGE_LLM_ENABLED
+    env var is exactly "1", falls back to DeepSeek (requires DEEPSEEK_API_KEY).
+    The deterministic solver always runs first and wins outright if it
+    returns anything but None — the LLM is never a second opinion against a
+    deterministic answer, only a fallback for the None case. Flag is off by
+    default.
+
     Returns:
-        dict with at least a `"solved"` bool. On low-confidence skip, returns
+        dict with at least a `"solved"` bool. On low-confidence skip (both
+        deterministic and, if enabled, LLM fallback returned None), returns
         {"solved": False, "skipped": True, "reason": "low_confidence"} and
         does NOT call the API — matching the "never guess" principle.
     """
@@ -1029,6 +1138,13 @@ def solve_and_verify(mb_call, verification: dict) -> dict:
     monitor.check_format_change(challenge_text)
 
     answer = CaptchaChamber.solve(challenge_text)
+    used_llm_fallback = False
+
+    if answer is None and os.environ.get(_LLM_ENABLED_FLAG) == "1":
+        logger.info("solve_and_verify: deterministic solver returned None, trying DeepSeek fallback")
+        answer = _deepseek_solve(challenge_text)
+        used_llm_fallback = answer is not None
+
     if answer is None:
         monitor.record_failure(challenge_text)
         logger.warning("solve_and_verify: low confidence, skipping. challenge=%r", challenge_text)
@@ -1041,12 +1157,22 @@ def solve_and_verify(mb_call, verification: dict) -> dict:
 
     if isinstance(resp, dict) and resp.get("success"):
         monitor.record_success()
-        logger.info("solve_and_verify: solved. challenge=%r answer=%s", challenge_text[:60], answer_str)
-        return {"solved": True, "answer": answer_str, "response": resp}
+        logger.info(
+            "solve_and_verify: solved (llm_fallback=%s). challenge=%r answer=%s",
+            used_llm_fallback, challenge_text[:60], answer_str,
+        )
+        return {"solved": True, "answer": answer_str, "used_llm_fallback": used_llm_fallback, "response": resp}
 
     monitor.record_failure(challenge_text)
     logger.warning(
-        "solve_and_verify: verify call failed. challenge=%r answer=%s response=%r",
-        challenge_text[:60], answer_str, resp,
+        "solve_and_verify: verify call failed (llm_fallback=%s). challenge=%r answer=%s response=%r",
+        used_llm_fallback, challenge_text[:60], answer_str, resp,
     )
-    return {"solved": False, "skipped": False, "reason": "verify_rejected", "answer": answer_str, "response": resp}
+    return {
+        "solved": False,
+        "skipped": False,
+        "reason": "verify_rejected",
+        "answer": answer_str,
+        "used_llm_fallback": used_llm_fallback,
+        "response": resp,
+    }

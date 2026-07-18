@@ -457,3 +457,60 @@ in diesem Live-Versuch falsch. Ein zweiter Testlauf mit einer einfacheren,
 addition-basierten Challenge hätte vermutlich funktioniert (wie bei den
 Offline-Samples 1/2/4), aber das würde das eigentliche Coverage-Problem nur
 verdecken, nicht beheben.
+
+---
+
+## §6 — Bug-Fixes + DeepSeek-Fallback (2026-07-18, ~20:25 UTC)
+
+### a. Vokabellücke behoben
+
+Root Cause war nicht nur eine fehlende Prüfung in `_extract_math()`, sondern
+eine fehlende Eintragung in der **Rekonstruktions-Vokabel** (`_OPERATOR_WORDS`),
+die `_pada_collapse`/`_pada_aggressive` nutzen, um verschleierte Wörter
+überhaupt korrekt zusammenzusetzen. "accelerates"/"gains"/"loses"/"looses"
+blieben ohne Vokabeleintrag als kaputte Fragmente stehen (z. B.
+"acceeleratesby"), weshalb selbst die erweiterten Trigger-Wortlisten in
+`_extract_math()` sie nie fanden. Fix: beide Stellen ergänzt —
+`_OPERATOR_WORDS` um `gains/gain/accelerates → +`, `loses/lose/looses/
+decelerates → -`; `_CONTEXT_WORDS` um `and` (niedrigste Priorität, nur wenn
+nichts Spezifischeres greift); `_extract_math()`s lokale Trigger-Listen
+entsprechend erweitert.
+
+### b. Scoring-Bug behoben
+
+`_score_completeness()` gab 0.5 für JEDEN Fund von ≥1 Zahl, auch bei genau
+einer erkannten Zahl ohne Operator (unvollständiger Treffer). Das erlaubte
+Ein-Zahl-Kandidaten, die Konfidenzschwelle 2.25/6.0 zu überschreiten (Beispiel
+Sample 3 vor dem Fix: Score 2.39 für die falsche Antwort "27" statt der
+korrekten "32"). Fix: `found_numbers == 1` → jetzt 0.0 statt 0.5.
+Nachgerechnet (Sample 3, vor dem Vokabel-Fix, nur mit Scoring-Fix): Score
+fällt auf 1.89 < 2.25 → korrektes `None` statt falscher Antwort. Nach beiden
+Fixes zusammen: Sample 3 liefert jetzt die korrekte Antwort "32" über
+`collapse`/`aggressive` (die jetzt beide Zahlen finden), nicht mehr über den
+unvollständigen `exact`-Treffer.
+
+### Testergebnis
+
+Neuer Testfall ergänzt: der live gescheiterte Fall ("...forty two newtons...
+looses twelve...", korrekt 30) als `test_sample_6_live_e2e_subtraction`.
+
+**56/56 grün** (51 aus §5 + 5 neue LLM-Fallback-Tests, gemockt, kein echter
+Netzwerkaufruf). Alle 6 realen Live-Samples (5 aus §4 + der E2E-Fall aus §5)
+lösen jetzt korrekt.
+
+### DeepSeek-Fallback
+
+`village/moltbook_captcha.py::_deepseek_solve()` — neuer Code, nicht portiert.
+Gate: `VILLAGE_CHALLENGE_LLM_ENABLED` (exakt `"1"`, sonst aus) UND
+`DEEPSEEK_API_KEY` gesetzt. Wird ausschließlich aufgerufen, wenn
+`CaptchaChamber.solve()` bereits `None` zurückgegeben hat — nie als
+Gegenprobe zu einer deterministischen Antwort (per Test abgesichert:
+`test_deterministic_answer_never_calls_llm` patcht `_deepseek_solve` so,
+dass ein Aufruf einen `AssertionError` auslöst, und bestätigt, dass er bei
+erfolgreicher deterministischer Lösung nie erreicht wird). Modell
+`deepseek-chat`, Endpoint `https://api.deepseek.com/chat/completions`,
+`temperature=0`. Liefert die LLM-Antwort ebenfalls `None` (statt "0" oder
+Rateversuch), greift der `ChallengeMonitor` unverändert.
+
+**Secret-Name für Kim: `DEEPSEEK_API_KEY`** (exakt dieser Name, in
+`kimeisele/agent-village` als Repo-Secret).
