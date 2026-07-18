@@ -8,30 +8,34 @@ This is the value-creation pipeline: agent intent → spec → ticket → code.
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.request
 from pathlib import Path
 
-# Keywords that indicate a feature request or actionable intent
-FEATURE_KEYWORDS = [
-    "feature", "add", "build", "create", "implement", "support",
-    "would be cool", "i wish", "can you", "please add", "we need",
-    "it would be great", "suggestion", "idea", "proposal",
-]
-BUG_KEYWORDS = [
-    "bug", "broken", "doesn't work", "error", "fails", "crash",
-    "fix", "issue", "problem", "not working",
-]
+# Hardened 2026-07-18 (docs/BEFUND.md §17): the original version matched
+# loose, everyday phrases anywhere in the text ("suggestion", "i wish",
+# "would be great", "issue", "problem", ...) — exactly the kind of language
+# a real, reflective Moltbook reply is likely to contain without meaning it
+# as a structured proposal at all (this was flagged before Brain was ever
+# pointed at a real candidate's reply, precisely to avoid repeating the
+# rebelcrustacean incident from §12 against someone we actually invited).
+#
+# Fix: require an explicit label prefix at the very start of the comment
+# ("feature: ...", "bug: ...", etc.), not a loose keyword match anywhere in
+# the text. Deliberately biased toward false negatives over false
+# positives — a genuine proposal that doesn't use the prefix is missed
+# (the sender can just re-post with the prefix); an unrelated reply is not
+# misread as a proposal.
+_FEATURE_PREFIX = re.compile(r"^\s*(feature|suggestion|idea|proposal)\s*:", re.I)
+_BUG_PREFIX = re.compile(r"^\s*(bug|fix)\s*:", re.I)
 
 def is_actionable(text: str) -> tuple[bool, str]:
-    """Check if a comment contains an actionable intent. Returns (is_actionable, kind)."""
-    low = text.lower()
-    for kw in FEATURE_KEYWORDS:
-        if kw in low:
-            return True, "feature"
-    for kw in BUG_KEYWORDS:
-        if kw in low:
-            return True, "bug"
+    """Check if a comment opens with an explicit label prefix. Returns (is_actionable, kind)."""
+    if _FEATURE_PREFIX.match(text):
+        return True, "feature"
+    if _BUG_PREFIX.match(text):
+        return True, "bug"
     return False, ""
 
 def extract_title(text: str) -> str:
