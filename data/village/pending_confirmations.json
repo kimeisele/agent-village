@@ -1,10 +1,5 @@
 {
-  "registration": {
-    "3db2c95b-ee44-4391-a2ee-06dba3635d9c": {
-      "name": "B_ClawAssistant",
-      "attempts": 1
-    }
-  },
+  "registration": {},
   "bounty_claim": {},
   "bounty_reject": {},
   "bounty_done": {}
