@@ -130,3 +130,63 @@ hinaus.**
 
 **Diese Beobachtung ist nicht Teil der Agent-Village-Migration und wird hier
 nur dokumentiert, damit sie nicht verloren geht.**
+
+---
+
+## §2 — Migration durchgeführt (2026-07-18, ~18:36 UTC)
+
+Verschoben von hermes-sankhya-25 nach agent-village (siehe SPEC.md §5 für
+die vollständige Liste): village mechanism (heartbeat/brain/nadi_bridge),
+data/village/*, village-heartbeat.yml, beide Registration-Issue-Templates,
+NADI-Knotenidentität (data/federation/{peer,nadi_inbox,nadi_outbox}.json,
+directives/, reports/, heartbeat.yml).
+
+Commits:
+- hermes-sankhya-25: `25af886` "migrate: village mechanism + NADI node
+  identity move to agent-village"
+- agent-village: `6e9aaf8` "migrate: village mechanism + NADI node identity
+  from hermes-sankhya-25"
+
+Fixes während der Migration (Details in SPEC.md §2.1/§2.3/§5):
+- NADI `target`-Feld → `transport_status: "local_only"`.
+- NADI-Heartbeat-Aufruf zusätzlich hinter `VILLAGE_NADI_ENABLED=1` (default
+  aus) verriegelt.
+- Pokedex-Einträge: neues Feld `status: "observed"`.
+- `peer.json`-Identität von hermes-sankhya-25 auf agent-village umbenannt.
+
+**Beide Scheduled Workflows (`heartbeat.yml`, `village-heartbeat.yml`) laufen
+NICHT automatisch.** Cron-Trigger entfernt, nur `workflow_dispatch`. Das war
+nicht explizit angewiesen, aber notwendig, um "Stop und warte auf mein Go vor
+Proof 1" tatsächlich einzuhalten — sonst hätte der Push selbst Proof 1
+scharf geschaltet.
+
+Verifiziert vor dem Push (nicht nur behauptet):
+- YAML/Python/JSON-Syntax aller verschobenen/geänderten Dateien geprüft.
+- hermes-sankhya-25: `pytest tests/` lief real, 11/11 grün (zwei Tests
+  entfernt, die jetzt fremde Dateien prüften — `test_peer_json_exists`,
+  `test_nadi_inbox_exists`).
+
+**Nicht verschoben, als tot markiert statt stillschweigend belassen:**
+`scripts/nadi_daemon.py`, `scripts/nadi_send.py`, `scripts/setup_node.py`
+bleiben in hermes-sankhya-25, referenzieren aber `data/federation/peer.json`,
+das dort nicht mehr existiert. Verifiziert: keine CI-Workflow ruft diese
+Skripte auf — inert, nicht live kaputt. Braucht Kims Entscheidung (verschieben,
+löschen, oder als bekannt-veraltet stehen lassen).
+
+**Offener Punkt aus SPEC.md §5:** `peer.json`s `capabilities`-Feld
+(`["authority-publishing", "inquiry-response"]`) wurde nicht angepasst —
+"authority-publishing" beschreibt die neue Rolle von agent-village nicht
+mehr korrekt, aber das ist eine Bedeutungsentscheidung, keine mechanische
+Umbenennung wie city_id/slug/repo. Nicht selbstständig geändert.
+
+**Village-Heartbeat-Sekundärbefund (unverändert relevant):** Population
+bleibt 0 (data/village/state.json, Stand vor der Migration) — nicht weil der
+Heartbeat nicht läuft (er lief zweimal erfolgreich vor der Migration), sondern
+weil noch kein externer Agent kommentiert/registriert hat. Nach der Migration
+läuft der Heartbeat vorerst gar nicht mehr automatisch (Cron entfernt),
+bis Proof 1 freigegeben wird.
+
+**Nicht getan, bewusst außerhalb des Scopes:** keine eigene Test-Suite für
+agent-village aufgebaut (die zwei aus hermes-sankhya-25 entfernten Tests
+wurden nicht hierher portiert) — das wäre neue Arbeit über "Dateien
+verschieben" hinaus und war nicht angewiesen.
