@@ -535,3 +535,106 @@ Post danach gelöscht (`200 "Post deleted"`).
 **Damit ist der geforderte Nachweis "kann automatisiert korrekt lösen" jetzt
 tatsächlich erbracht** — im Gegensatz zum vorherigen Versuch in §5, der mit
 falscher Antwort scheiterte.
+
+---
+
+## §8 — Heartbeat-Einbau (2026-07-18, ~20:40 UTC)
+
+### 1. Verify-Mechanismus eingebaut
+
+`village/heartbeat.py::_post_comment_verified()` ersetzt alle 5 direkten
+`_mb(f"posts/{REG_POST}/comments", "POST", ...)`-Aufrufe (Registrierungs-
+Antwort, Bounty-Claim Erfolg/Fehlschlag, Bounty-Done, Brain-Issue-Antwort).
+Jeder ausgehende Kommentar läuft jetzt automatisch durch `solve_and_verify()`,
+wenn Moltbook eine `verification`-Challenge zurückgibt. 4 neue Tests
+(gemockt), 60/60 Tests insgesamt grün. Commit `b63dd8c`.
+
+**Wichtig, unverändert:** `dex_register()`/`bounty_claim()`/`bounty_complete()`
+passieren weiterhin unbedingt, unabhängig davon, ob die Bestätigungs-Antwort
+verifiziert wird — siehe Punkt 3 unten, das ist Kims Entscheidung, nicht
+selbstständig geändert.
+
+### 2. ChallengeMonitor — in-Zyklus-Halt eingebaut, Bann-Schwelle nur Vorschlag
+
+**Eingebaut:** `_post_comment_verified()` prüft `ChallengeMonitor.is_halted`
+VOR jedem Kommentar-Versuch. Bei 5 aufeinanderfolgenden Fehlschlägen wird
+der Kommentar gar nicht erst gepostet (kein zusätzlicher API-Call, kein
+verschwendeter Versuch Richtung Bann-Schwelle), klar geloggt, restlicher
+Heartbeat (GH-Scan, State-Update) läuft normal weiter.
+
+**Wichtige Einschränkung, die ich beim Bauen gefunden habe:** `python3
+village/heartbeat.py` läuft bei jedem Cron-Tick als **frischer Prozess**
+auf einem frischen GitHub-Actions-Runner. Das `ChallengeMonitor`-Singleton
+lebt nur im Prozessspeicher — **der Halt gilt nur innerhalb EINES
+15-Minuten-Zyklus, nicht zyklusübergreifend.** Die Bann-Schwelle (10) aus
+dem Originalcode war für einen langlaufenden Daemon-Prozess gedacht, nicht
+für einen zustandslosen Cron-Job. Um 10 tatsächlich zyklusübergreifend zu
+erreichen, bräuchte man mindestens 10 fehlgeschlagene Kommentar-Versuche
+in einem einzigen Durchlauf — bei erwartetem Traffic-Volumen ein hoher
+Wert, aber theoretisch möglich.
+
+**Mein Vorschlag (nicht gebaut, deine Entscheidung):** Monitor-Zähler
+(`total_failures`, `consecutive_failures`) zusätzlich in `data/village/`
+persistieren (z. B. neue Datei `challenge_monitor_state.json`), beim
+Start jedes Laufs laden, am Ende speichern — dann akkumuliert die
+Bann-Schwelle tatsächlich über Zyklen hinweg. Bei Erreichen von 10: **kein**
+automatisches Deaktivieren des Cron-Workflows durch das Skript selbst (zu
+folgenreich/schwer rückgängig zu machen für ein automatisiertes Skript,
+das sich selbst abschaltet) — stattdessen ein hartes, unübersehbares Log
+(`::error::` GitHub-Actions-Annotation, erscheint prominent im Actions-UI)
+plus eine persistierte `"banned_until_manual_reset": true`-Flagge in dieser
+neuen Datei, die `_post_comment_verified()` zusätzlich zum In-Prozess-Halt
+prüft und bei der jeder weitere Kommentarversuch verweigert wird, bis ein
+Mensch die Datei zurücksetzt. Das ist technisch am einfachsten sauber zu
+bauen (keine neue Infrastruktur wie E-Mail/Webhook nötig, nutzt nur Git +
+Actions-Log), aber **nicht implementiert** — nur Vorschlag.
+
+### 3. Verhalten bei None — Vorschlag, keine Entscheidung getroffen
+
+Aktuelles Verhalten (unverändert): `processed_comments.json` markiert eine
+eingehende Kommentar-ID als verarbeitet, **bevor** die Bestätigungs-Antwort
+gepostet wird — unabhängig vom Verify-Ergebnis. Das entspricht strukturell
+bereits "Option B" (siehe unten), ohne dass ich das bewusst so entschieden
+hätte — es ist einfach der bestehende Code, den ich nicht verändert habe.
+
+**Option A — Retry beim nächsten Zyklus:** `proc.add(cid)` erst NACH
+bestätigter Verifizierung setzen. Vorteil: kein manuelles erneutes
+Kommentieren durch den externen Agenten nötig; `dex_register()` ist
+idempotent (Dup-Check vorhanden), Retry verursacht keine Doppel-
+Registrierung. Nachteil: bei einer strukturell unlösbaren Challenge-
+Formulierung würde derselbe Kommentar dauerhaft jeden Zyklus neu versucht
+werden, bis der In-Zyklus-Halt (5 Fehlschläge) greift — bei genug
+aufeinanderfolgenden Zyklen mit Fehlschlägen ließe sich so theoretisch die
+Moltbook-eigene Bann-Schwelle erreichen, auch mit dem oben vorgeschlagenen
+Fix.
+
+**Option B — Endgültig verworfen:** aktuelles Verhalten explizit beibehalten.
+Vorteil: einfach, kein Risiko von Dauer-Retries. Nachteil: externer Agent
+bekommt keine Bestätigung und weiß nicht, ob die Registrierung durchging
+(sie ist lokal tatsächlich passiert — nur der Kommentar fehlt) — müsste
+manuell erneut kommentieren, was aber wegen des `_dup`-Checks in
+`dex_register()` harmlos wäre (kein Doppel-Eintrag), nur ein zweiter
+Versuch für die Bestätigung.
+
+**Meine Empfehlung: Option A**, mit der Einschränkung, dass sie sauber
+mit dem oben vorgeschlagenen zyklusübergreifenden Bann-Schutz kombiniert
+werden sollte (sonst wächst das Retry-Risiko unkontrolliert). Ohne diesen
+Schutz würde ich eher zu Option B raten. Nicht implementiert — deine
+Entscheidung.
+
+### 4. Kontrollierter Testlauf vor Cron-Reaktivierung — BLOCKIERT
+
+**Ich habe keine Post-ID für einen bereits existierenden Village-
+Registrierungspost von Hermes.** In einer früheren Nachricht wurde
+angekündigt "Sobald Hermes einen dedizierten Agent-Village-Post erstellt
+hat, bekommst du die ID" — diese ID ist nie im Chat angekommen.
+`gh variable list -R kimeisele/agent-village` bestätigt: `MB_REG_POST` ist
+nach wie vor nicht gesetzt (leere Ausgabe, geprüft 2026-07-18 ~20:40 UTC).
+
+Ohne diese ID kann ich weder den kontrollierten Testlauf noch die
+Cron-Reaktivierung durchführen — `scan_moltbook()`/`scan_brain()` würden
+weiterhin sofort mit "MB_REG_POST not configured — skipping" abbrechen.
+
+**Ich brauche von dir:** die Post-ID (oder den vollen Moltbook-Permalink)
+des dedizierten Village-Registrierungsposts, bevor ich mit dem
+kontrollierten Testlauf fortfahren kann.
