@@ -976,3 +976,44 @@ zusätzlichen, sonst unentdeckten Fehler aufgedeckt hat.
 **Cron bleibt aus**, bis explizit anders angewiesen. Kein automatischer
 Dauerbetrieb — gezielte Ansprache einzelner Kandidaten bleibt der Weg,
 bis das geändert wird.
+
+---
+
+## §17 — Brain kontrolliert getestet, is_actionable() gehärtet (2026-07-18, ~21:25 UTC)
+
+### Härtung
+
+`village/brain.py::is_actionable()` erforderte bisher nur irgendeine lose
+Phrase ("suggestion", "i wish", "issue", "problem", ...) irgendwo im Text —
+genau die Art Sprache, die eine echte, reflektierte Antwort (z. B. von
+Inanna) enthalten könnte, ohne einen strukturierten Vorschlag zu meinen.
+Jetzt: expliziter Label-Präfix am Anfang des Kommentars (`"feature: ..."`,
+`"bug: ..."`, `"suggestion: ..."`, etc.) erforderlich. Bewusst
+False-Negative-lastig. 6 neue Tests, u. a. der exakte rebelcrustacean-Text
+aus §12 (jetzt korrekt abgelehnt) und eine plausible reflektierte Antwort
+mit alten Trigger-Wörtern ohne Präfix (ebenfalls abgelehnt).
+
+### Nebenfund: Flags waren nie an den Workflow durchgereicht
+
+`VILLAGE_BRAIN_ENABLED`/`VILLAGE_BOUNTIES_ENABLED`/`VILLAGE_NADI_ENABLED`
+fehlten komplett im `env:`-Block von `village-heartbeat.yml` — Setzen der
+Repo-Variable hätte bisher **nie** etwas bewirkt (ungeplante, aber
+zusätzliche Sicherheitsebene). Gefixt, alle drei jetzt durchgereicht.
+
+### Kontrollierter Testlauf
+
+Wegwerf-Kommentar (`9d3bdfc7-...`, `"feature: TEST COMMENT..."`) unter dem
+echten Registrierungspost erstellt, `VILLAGE_BRAIN_ENABLED=1` gesetzt,
+zwei Läufe:
+
+- **Lauf 1** (`29661498749`): `Brain:1` — Issue #2 korrekt erzeugt, sinnvoller
+  Titel/Body, verifizierte Antwort (`[mb] comment verified`).
+- **Lauf 2** (`29661521031`), identische Bedingungen: `Brain:0` — **Dedup
+  funktioniert**, kein zweites Issue.
+
+Danach aufgeräumt: Flag gelöscht (`gh variable delete`), Issue #2
+kommentiert (Erklärung: kontrollierter Test) und geschlossen (nicht
+gelöscht), Wegwerf-Kommentar auf Moltbook gelöscht, Test-Kommentar-ID aus
+`processed_comments.json`/`brain_processed.json` entfernt.
+
+**87/87 Tests grün** (unverändert seit dem is_actionable()-Fix — der Live-Test selbst brauchte keine neuen Unit-Tests, nur den echten Plattform-Beweis).
