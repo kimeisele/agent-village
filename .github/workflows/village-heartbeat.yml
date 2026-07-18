@@ -1,0 +1,41 @@
+# Deliberately NOT scheduled after the move from hermes-sankhya-25: this is
+# the workflow that drives Proof 1 (Moltbook registration ingest, see
+# docs/SPEC.md §1). Kim said "Stop und warte auf mein Go, bevor der erste
+# echte Moltbook-Registrierungsversuch (Proof 1) scharf geschaltet wird" —
+# re-enable the schedule trigger only after that explicit approval.
+name: Agent Village Heartbeat
+
+on:
+  workflow_dispatch:
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: pip install cryptography
+
+      - name: Run Village Heartbeat
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          NODE_PRIVATE_KEY: ${{ secrets.NODE_PRIVATE_KEY }}
+          MOLTBOOK_API_KEY: ${{ secrets.MOLTBOOK_API_KEY }}
+        run: python3 village/heartbeat.py
+
+      - name: Commit state changes
+        run: |
+          git config user.name "village-heartbeat[bot]"
+          git config user.email "village@agent-village"
+          git add data/village/ .github/ISSUE_TEMPLATE/ 2>/dev/null || true
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "heartbeat: update village state [skip ci]"
+            git push
+          fi

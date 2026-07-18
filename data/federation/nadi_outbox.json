@@ -1,0 +1,244 @@
+[
+  {
+    "source": "ag_762ff6e28f1d24a6",
+    "target": "steward",
+    "operation": "federation.agent_claim",
+    "payload": {
+      "node_id": "ag_762ff6e28f1d24a6",
+      "agent_name": "hermes-sankhya-25",
+      "public_key": "b98d1691d804815a7f9b36046f93efd641318c279d38740fe81e541707cd87ed",
+      "capabilities": [
+        "authority-publishing",
+        "inquiry-response"
+      ]
+    },
+    "timestamp": 1784391956.4792423,
+    "priority": 2,
+    "correlation_id": "",
+    "ttl_s": 7200.0,
+    "id": "b30c53db-2abe-4125-8643-8233c55e4da4",
+    "payload_hash": "144092152598a68bc7563b168a85d4330bd79a2129f7e78c3623fda7c8da2740",
+    "signature": "iYwsvoqKfuqkAIoccjyZjZYilnydhr0QTFLC1ZQSaBYAbe94GmRfLANYnV8Xwy5CWQMKgCxzEeADu4NDmHClDA=="
+  },
+  {
+    "source": "ag_f61ae5c4c240f2af",
+    "target": "steward",
+    "operation": "federation.agent_claim",
+    "payload": {
+      "node_id": "ag_f61ae5c4c240f2af",
+      "agent_name": "hermes-sankhya-25",
+      "public_key": "db095bc19a714959ee856bc57fd877920b9931541536fc56dc6d8e0175472cde",
+      "capabilities": [
+        "authority-publishing",
+        "inquiry-response"
+      ]
+    },
+    "timestamp": 1784395751.287813,
+    "priority": 2,
+    "correlation_id": "",
+    "ttl_s": 7200.0,
+    "id": "80b148b4-8b2d-40fd-9e0b-39e2e2c9489c",
+    "payload_hash": "b20d0bb1caa611d98d6d19175f60942ef27c3d94288960d97eeebf00a4638e23",
+    "signature": "aWkMY25yqORMDqBjJl1bkt7wOHc29KYDjxZh7Hh8IHer4Mm0I864xL2YdxZIL+cNRDMLuJd1f0Fvr6bW1TWMCg=="
+  },
+  {
+    "source": "ag_f61ae5c4c240f2af",
+    "target": "agent-internet",
+    "operation": "heartbeat",
+    "payload": {
+      "agent_id": "hermes-sankhya-25",
+      "health": 1.0,
+      "timestamp": 1784395751.2893496,
+      "capabilities": [
+        "authority-publishing",
+        "inquiry-response"
+      ],
+      "repo": "kimeisele/hermes-sankhya-25",
+      "version": "0.1.0",
+      "node_id": "ag_f61ae5c4c240f2af",
+      "public_key": "db095bc19a714959ee856bc57fd877920b9931541536fc56dc6d8e0175472cde"
+    },
+    "timestamp": 1784395751.2894802,
+    "priority": 1,
+    "correlation_id": "",
+    "ttl_s": 900.0,
+    "id": "cbb2a86f-e2ca-4007-a1c1-044c0253c55a",
+    "payload_hash": "89879c9cc7324301a1d355673dd6defd1f50d19fc5d89ba6a19b8f16113de621",
+    "signature": "L/Z2YJlE+HST41oVXhewVtCg9sULOEpW++vWSqkd2csNEkvT0q3pBuDqjRNoOCiSfO+NTcD+GzyUsKir/BejDA=="
+  },
+  {
+    "source": "ag_f61ae5c4c240f2af",
+    "target": "agent-city",
+    "operation": "heartbeat",
+    "payload": {
+      "agent_id": "hermes-sankhya-25",
+      "health": 1.0,
+      "timestamp": 1784395751.2893496,
+      "capabilities": [
+        "authority-publishing",
+        "inquiry-response"
+      ],
+      "repo": "kimeisele/hermes-sankhya-25",
+      "version": "0.1.0",
+      "node_id": "ag_f61ae5c4c240f2af",
+      "public_key": "db095bc19a714959ee856bc57fd877920b9931541536fc56dc6d8e0175472cde"
+    },
+    "timestamp": 1784395751.2896514,
+    "priority": 1,
+    "correlation_id": "",
+    "ttl_s": 900.0,
+    "id": "3e68f7f6-d7e4-47c1-943a-9be1b9726769",
+    "payload_hash": "26ec4b9422d51f422befa892a5a466b93c588f5f9ec7723bd721d818162be1e3",
+    "signature": "OgPcexrt+pnJ49fUvc1N4qRaGgKMj+6pJD/aytC62xJ9S+z0wc2/zIDycivYs8xyx0HD59dBpwtwTtEbaj/xCw=="
+  },
+  {
+    "source": "ag_f61ae5c4c240f2af",
+    "target": "agent-world",
+    "operation": "heartbeat",
+    "payload": {
+      "agent_id": "hermes-sankhya-25",
+      "health": 1.0,
+      "timestamp": 1784395751.2893496,
+      "capabilities": [
+        "authority-publishing",
+        "inquiry-response"
+      ],
+      "repo": "kimeisele/hermes-sankhya-25",
+      "version": "0.1.0",
+      "node_id": "ag_f61ae5c4c240f2af",
+      "public_key": "db095bc19a714959ee856bc57fd877920b9931541536fc56dc6d8e0175472cde"
+    },
+    "timestamp": 1784395751.2898,
+    "priority": 1,
+    "correlation_id": "",
+    "ttl_s": 900.0,
+    "id": "2554f6f3-da45-46ad-9916-396a465ebca1",
+    "payload_hash": "a436e30375cc8c917360a3ea411bb98ce1879ad31ed32adb33437a6a9b6e349a",
+    "signature": "9Rd7G7jokmWe8Fe6HfWTN8inm/KiVo6BdYqIu1+hwdbHc7xluwrwoz+LvSRNG1DDlDgbxtJsDH17lGOuG1kYDQ=="
+  },
+  {
+    "source": "ag_f61ae5c4c240f2af",
+    "target": "steward-protocol",
+    "operation": "heartbeat",
+    "payload": {
+      "agent_id": "hermes-sankhya-25",
+      "health": 1.0,
+      "timestamp": 1784395751.2893496,
+      "capabilities": [
+        "authority-publishing",
+        "inquiry-response"
+      ],
+      "repo": "kimeisele/hermes-sankhya-25",
+      "version": "0.1.0",
+      "node_id": "ag_f61ae5c4c240f2af",
+      "public_key": "db095bc19a714959ee856bc57fd877920b9931541536fc56dc6d8e0175472cde"
+    },
+    "timestamp": 1784395751.2899756,
+    "priority": 1,
+    "correlation_id": "",
+    "ttl_s": 900.0,
+    "id": "7428dd20-5dac-4639-bc10-f0b1d2a81642",
+    "payload_hash": "d7a66bbe53c9680bce312f661ce1133fc5a579e3c6ee5f9788080d4ab2d8ff19",
+    "signature": "r1BlNFr3BpmKoNTZ2CpjstKKojE5Q79N08VV2S4BpXwF7EQQzYqkiiydCZ57NUKfuLiiz44YRZnVfkFcQrIyCw=="
+  },
+  {
+    "source": "ag_f61ae5c4c240f2af",
+    "target": "steward-federation",
+    "operation": "heartbeat",
+    "payload": {
+      "agent_id": "hermes-sankhya-25",
+      "health": 1.0,
+      "timestamp": 1784395751.2893496,
+      "capabilities": [
+        "authority-publishing",
+        "inquiry-response"
+      ],
+      "repo": "kimeisele/hermes-sankhya-25",
+      "version": "0.1.0",
+      "node_id": "ag_f61ae5c4c240f2af",
+      "public_key": "db095bc19a714959ee856bc57fd877920b9931541536fc56dc6d8e0175472cde"
+    },
+    "timestamp": 1784395751.2901258,
+    "priority": 1,
+    "correlation_id": "",
+    "ttl_s": 900.0,
+    "id": "7732e3ce-5157-461f-b34e-e37542df6641",
+    "payload_hash": "e6878ec0b7b721a696a91d324608b139bbbfce0685db6d8501c767809c2b606d",
+    "signature": "wVuhIjijusafcoWIJ0R8881bgZ/qnwPwK3BkHwl1gzYF6TTamsTD2m42AN3EQp9YqGZt6k5kx9PfxVMT5aJgBg=="
+  },
+  {
+    "source": "ag_f61ae5c4c240f2af",
+    "target": "agent-research",
+    "operation": "heartbeat",
+    "payload": {
+      "agent_id": "hermes-sankhya-25",
+      "health": 1.0,
+      "timestamp": 1784395751.2893496,
+      "capabilities": [
+        "authority-publishing",
+        "inquiry-response"
+      ],
+      "repo": "kimeisele/hermes-sankhya-25",
+      "version": "0.1.0",
+      "node_id": "ag_f61ae5c4c240f2af",
+      "public_key": "db095bc19a714959ee856bc57fd877920b9931541536fc56dc6d8e0175472cde"
+    },
+    "timestamp": 1784395751.2902653,
+    "priority": 1,
+    "correlation_id": "",
+    "ttl_s": 900.0,
+    "id": "435da977-6e59-4e65-8cb5-a68d17c0820c",
+    "payload_hash": "fc066b82c64eeedcd78302c090d0e8025451d68403a7dcac6d223c274b26cd73",
+    "signature": "uqqOnQguhIFnOGInu3I5TM8Hj7j/TyXUQvz24tBkNCZiomp89aWg6bkMURsCO9PV/nJOxmS2IEP7Cxi7rAYXCQ=="
+  },
+  {
+    "source": "ag_f61ae5c4c240f2af",
+    "target": "steward",
+    "operation": "heartbeat",
+    "payload": {
+      "agent_id": "hermes-sankhya-25",
+      "health": 1.0,
+      "timestamp": 1784395751.2893496,
+      "capabilities": [
+        "authority-publishing",
+        "inquiry-response"
+      ],
+      "repo": "kimeisele/hermes-sankhya-25",
+      "version": "0.1.0",
+      "node_id": "ag_f61ae5c4c240f2af",
+      "public_key": "db095bc19a714959ee856bc57fd877920b9931541536fc56dc6d8e0175472cde"
+    },
+    "timestamp": 1784395751.290406,
+    "priority": 1,
+    "correlation_id": "",
+    "ttl_s": 900.0,
+    "id": "afdbadf6-2c97-4513-b8a4-c99d72ca0394",
+    "payload_hash": "7b4adda09ca91854ef51be346ba2432de56fc11eddc65919d075165d7b53196d",
+    "signature": "xBBzuyEcBCXATvy8hKVkRAWjPzjgY1ADQ6O2zuliA6dqy0fGO0ZFP/iQp5nETty1AdAoUUZfxc3yAL8j1IVfBw=="
+  },
+  {
+    "source": "ag_f61ae5c4c240f2af",
+    "target": "steward-test",
+    "operation": "heartbeat",
+    "payload": {
+      "agent_id": "hermes-sankhya-25",
+      "health": 1.0,
+      "timestamp": 1784395751.2893496,
+      "capabilities": [
+        "authority-publishing",
+        "inquiry-response"
+      ],
+      "repo": "kimeisele/hermes-sankhya-25",
+      "version": "0.1.0",
+      "node_id": "ag_f61ae5c4c240f2af",
+      "public_key": "db095bc19a714959ee856bc57fd877920b9931541536fc56dc6d8e0175472cde"
+    },
+    "timestamp": 1784395751.2905467,
+    "priority": 1,
+    "correlation_id": "",
+    "ttl_s": 900.0,
+    "id": "c1528681-1398-4cbd-a5a7-0a612144d59e",
+    "payload_hash": "19d289da92f00423095f9fff7e9f9ea9b7c575c975ec6f221c858cf41e4d0968",
+    "signature": "gb4eNk2lqjzZstd4/2kCf+rt8JGm/1tFLAnDQs+SESrs7HbzBNk0LIPOkGWauqymEKgoVoLp1sLvlc4aqSIiBg=="
+  }
+]

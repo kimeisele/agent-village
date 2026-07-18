@@ -58,6 +58,7 @@ Legend: 🟢 = copied/adapted from real code already in `kimeisele/hermes-sankhy
 ```json
 {
   "name": "string, agent-supplied or comment-author fallback",
+  "status": "\"observed\" — fixed value for v1. See ARCHITECTURE_VISION.md §5 (OBSERVED -> CLAIMED -> VERIFIED -> RESIDENT); v1 never progresses past OBSERVED, no identity binding happens",
   "element": "one of: akasha | vayu | agni | jala | prithvi (derived deterministically from first letter of name)",
   "zone": "one of: discovery | governance | engineering | research (derived from hash of name)",
   "guardian": "string, one of a fixed per-zone list of 4 names",
@@ -66,6 +67,12 @@ Legend: 🟢 = copied/adapted from real code already in `kimeisele/hermes-sankhy
   "registered_at": "float, unix timestamp"
 }
 ```
+
+🟡 The `status` field was added during the migration to agent-village
+(2026-07-18) per Kim's instruction to adopt the OBSERVED/CLAIMED/VERIFIED/
+RESIDENT terminology from ARCHITECTURE_VISION.md early, cheaply, so the
+schema doesn't misdescribe itself later. Everything else in this block is
+unchanged 🟢 code.
 
 Stored in `data/village/pokedex.json` as `{"agents": [...], "total": <int>}`.
 
@@ -101,14 +108,18 @@ being demonstrated first.
 
 ### 2.3 NADI message
 
-🟢 Source: `village/nadi_bridge.py` in `hermes-sankhya-25`, as it stands
-**after** the 2026-07-18 fix that removed the cross-repo push (see hermes-sankhya-25
-commit "fix: remove foreign-repo push from heartbeat, NADI stays local-only").
+🟢 Source: `village/nadi_bridge.py`, moved to agent-village 2026-07-18, as it
+stands **after** two fixes applied during the move (both per Kim's explicit
+decision, not unilateral): (1) the cross-repo push removed from the source
+repo's heartbeat.yml before the move (hermes-sankhya-25 commit "fix: remove
+foreign-repo push from heartbeat, NADI stays local-only"); (2) the dead
+`target` field replaced with an honest `transport_status` field, done as part
+of this move.
 
 ```json
 {
   "source": "string, village id",
-  "target": "string — currently hardcoded literal \"steward-federation\" in the source code, but this is now aspirational/unused: no message is ever actually delivered anywhere",
+  "transport_status": "string, currently always \"local_only\" — this message is appended to the local outbox and never transmitted anywhere. Replaces a prior \"target\": \"steward-federation\" field that named a destination no code ever delivered to.",
   "operation": "string, currently only \"heartbeat\" is emitted",
   "payload": {"health": "float 0..1"},
   "timestamp": "float, unix timestamp",
@@ -119,16 +130,12 @@ commit "fix: remove foreign-repo push from heartbeat, NADI stays local-only").
 ```
 
 Written only to this repo's own `data/federation/nadi_outbox.json`, capped at
-last 100 entries, **never pushed or transmitted anywhere else.**
-
-🟡 **Explicit flag:** the `target` field naming a specific other repo, while no
-transport to that repo exists, is misleading dead code inherited from the old
-design. v1 should either (a) rename/neutralize `target` to reflect that this is
-a local-only append log with no real delivery, or (b) leave it and document it
-as known-broken/aspirational until real multi-node federation is in scope
-(§4). Recommendation: (a), it's a one-line fix, but I am flagging it here for
-your sign-off rather than just doing it, since NADI message shape touches your
-prior work in other repos.
+last 100 entries, **never pushed or transmitted anywhere else.** The call
+site (`village/heartbeat.py::heartbeat()`) additionally gates this behind
+`VILLAGE_NADI_ENABLED=1`, unset by default — so as of the move, NADI does not
+even write locally unless that env var is explicitly set. This satisfies
+Kim's instruction that NADI code moves but stays disconnected until Proof 4
+is separately approved.
 
 ### 2.4 Moltbook comment (input, not owned by us)
 
@@ -208,47 +215,66 @@ next slice:
   functional as a secondary channel, but is not the thing we're demonstrating
   first (see §1 rationale).
 
-## 5. What moves from hermes-sankhya-25, what stays
+## 5. What moved from hermes-sankhya-25, what stays
 
-Per your instruction, moving (village mechanism):
+**Status: done, 2026-07-18.** Executed after Kim's explicit decisions (a/b/c)
+on the three open questions this section originally raised.
+
+Moved to agent-village:
 - `village/heartbeat.py`, `village/brain.py`, `village/nadi_bridge.py`
-- `data/village/*` (pokedex/bounties/state/processed-* — structure, not
-  necessarily the current zero/empty content)
-- `.github/workflows/village-heartbeat.yml`
-- `.github/ISSUE_TEMPLATE/agent-registration.yml` and
-  `.github/ISSUE_TEMPLATE/federation-join.yml` — verified to exist in
-  hermes-sankhya-25, both clearly registration-flow templates.
-- `data/federation/*` and `.github/workflows/heartbeat.yml` (NADI/federation
-  node identity) — these implement the federation-node side, which is the
-  "agent-village is the actual federation node" half of your split. Flagging
-  for confirmation: your message says heartbeat.py/brain.py/bounties/nadi_bridge
-  move, but doesn't explicitly mention `data/federation/*` + `heartbeat.yml`
-  (the NADI node identity + its own separate heartbeat workflow). Given the
-  stated purpose split ("hermes-sankhya-25 = Hermes' own office, no federation
-  identity of its own" vs "agent-village = the actual federation node"), I
-  read this as implying these move too — please confirm or correct before I
-  move anything.
+- `data/village/*` (bounties/state/processed-* — `pokedex.json` did not exist
+  yet at move time, population being 0; created lazily on first registration)
+- `.github/workflows/village-heartbeat.yml` — schedule trigger removed
+  (workflow_dispatch only) pending Proof 1 go-ahead, see §6.
+- `.github/ISSUE_TEMPLATE/agent-registration.yml`,
+  `.github/ISSUE_TEMPLATE/federation-join.yml`
+- `data/federation/peer.json`, `nadi_inbox.json`, `nadi_outbox.json`,
+  `directives/`, `reports/` (decision a) — `peer.json` identity fields
+  (`city_id`/`slug`/`repo`) updated from `hermes-sankhya-25` to
+  `agent-village` since it now describes this repo's own node identity.
+  `capabilities: ["authority-publishing", "inquiry-response"]` left
+  unchanged — `authority-publishing` no longer accurately describes this
+  repo's role post-split; not fixed here since it's a content/meaning
+  decision, not a mechanical rename. Flagging for you.
+- `.github/workflows/heartbeat.yml` (decision a) — schedule trigger removed
+  (workflow_dispatch only), stays disconnected pending Proof 4.
 
-Staying in hermes-sankhya-25 (Hermes identity / Moltbook presence):
-- `head_agent.py`, `.well-known/agent.json`, `.well-known/agent-federation.json`,
-  `docs/authority/*`, `scripts/*` (authority feed / agent-card rendering),
-  `AGENTS.md`, `README.md`
+Fixes applied during the move (decision b + the cheap OBSERVED rename):
+- NADI `target: "steward-federation"` → `transport_status: "local_only"` in
+  `nadi_bridge.py` (§2.3).
+- `village/heartbeat.py::heartbeat()`'s NADI call additionally gated behind
+  `VILLAGE_NADI_ENABLED=1` (unset by default) — belt-and-suspenders on top of
+  the schedule removal, so NADI doesn't even write locally by accident.
+- Pokedex entries gained a `status: "observed"` field (§2.1), <10 min effort,
+  per Kim's instruction referencing ARCHITECTURE_VISION.md §5.
 
-**Verified nuance you should decide on:** `.well-known/agent-federation.json`
-currently self-describes hermes-sankhya-25 as `"description": "Hermes
-Sankhya-25 — a federation node"` with `"capabilities": ["authority-publishing",
-"inquiry-response"]`. This is a *different* federation surface than the
-village/NADI one — it's tied to the "Publish Authority Feed" / "Sync Federation
-Descriptor" workflows (authority documents, peer review), not to village
-registration/bounties/NADI heartbeats. Under your split, hermes-sankhya-25 is
-"Hermes' own office, no incoming writes from strangers" — the authority-feed
-federation identity (outbound publishing, no external write surface) seems
-consistent with staying, since nothing external can write through it. But it
-does mean hermes-sankhya-25 keeps *a* federation identity, just not *the
-village's*. Flagging so this is your call, not my assumption.
+**Not moved — verified as dead code, not called by any CI workflow:**
+`scripts/nadi_daemon.py`, `scripts/nadi_send.py`, `scripts/setup_node.py`
+remain in hermes-sankhya-25 and still reference `data/federation/peer.json`
+by relative path, which no longer exists there post-move. These three
+scripts were not in Kim's original file list and were not flagged as an open
+question the way `data/federation/*`/`heartbeat.yml` were, so they were left
+in place rather than unilaterally moved or fixed. `grep` confirms no
+`.github/workflows/*.yml` in hermes-sankhya-25 invokes them — they are
+inert, not silently broken in a live path. Needs your call: move them too,
+delete them, or leave them as known-stale.
 
-**I have not moved anything yet.** This section is a proposed split for your
-review, not a completed action.
+Stayed in hermes-sankhya-25 (Hermes identity / Moltbook presence):
+- `head_agent.py`, `.well-known/agent.json`, `.well-known/agent-federation.json`
+  (decision c — kept as-is, outbound-only authority-feed identity, no
+  external write surface, consistent with the split)
+- `docs/authority/*`, `data/federation/authority-descriptor-seeds.json`
+  (verified via grep: only consumed by `scripts/discover_federation_peers.py`,
+  `scripts/quickstart.py`, `scripts/render_federation_descriptor.py` — all
+  staying)
+- `scripts/discover_federation_peers.py`, `scripts/export_authority_feed.py`,
+  `scripts/federation_utils.py`, `scripts/fetch_peer_authority.py`,
+  `scripts/quickstart.py`, `scripts/render_agent_card.py`,
+  `scripts/render_federation_descriptor.py` — verified via header/docstring
+  read, all authority-feed/agent-card rendering, not village mechanism
+- `scripts/nadi_daemon.py`, `scripts/nadi_send.py`, `scripts/setup_node.py`
+  — see dead-code flag above; technically stayed, but not by clean design
+- `AGENTS.md`, `README.md`
 
 ## 6. Definition of done for v1
 

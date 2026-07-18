@@ -1,0 +1,23 @@
+{
+  "identity": {
+    "city_id": "agent-village",
+    "slug": "agent-village",
+    "repo": "kimeisele/agent-village",
+    "public_key": ""
+  },
+  "endpoint": {
+    "city_id": "agent-village",
+    "transport": "filesystem",
+    "location": "data/federation"
+  },
+  "capabilities": [
+    "authority-publishing",
+    "inquiry-response"
+  ],
+  "nadi": {
+    "outbox": "data/federation/nadi_outbox.json",
+    "inbox": "data/federation/nadi_inbox.json",
+    "reports": "data/federation/reports/",
+    "directives": "data/federation/directives/"
+  }
+}

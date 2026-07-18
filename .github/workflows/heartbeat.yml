@@ -1,0 +1,64 @@
+# Moved from hermes-sankhya-25 along with the rest of the NADI node identity
+# (docs/BEFUND.md §0 decision a). Deliberately NOT scheduled: NADI stays
+# disconnected until Proof 4 is explicitly approved (see
+# docs/ARCHITECTURE_VISION.md §8/§12). workflow_dispatch only, so it can be
+# hand-run for testing without going live on a cron.
+name: Node Heartbeat
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: heartbeat
+  cancel-in-progress: false
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.FEDERATION_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install cryptography
+
+      - name: Download nadi_kit
+        env:
+          NODE_PRIVATE_KEY: ${{ secrets.NODE_PRIVATE_KEY }}
+          GH_TOKEN: ${{ secrets.FEDERATION_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          curl -sL -H "Authorization: token ${GH_TOKEN}" \
+            "https://raw.githubusercontent.com/kimeisele/steward-federation/main/nadi_kit.py" \
+            -o nadi_kit.py
+          python3 -c "import sys; sys.path.insert(0, '.'); import nadi_kit; print('nadi_kit loaded')"
+
+      - name: Run NADI heartbeat cycle
+        env:
+          NODE_PRIVATE_KEY: ${{ secrets.NODE_PRIVATE_KEY }}
+          GH_TOKEN: ${{ secrets.FEDERATION_PAT || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.FEDERATION_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          python3 nadi_kit.py --peer-json data/federation/peer.json sync
+          python3 nadi_kit.py --peer-json data/federation/peer.json heartbeat --health 1.0
+          python3 nadi_kit.py --peer-json data/federation/peer.json sync
+
+      - name: Commit federation state
+        if: always()
+        run: |
+          git config user.name "federation-bot"
+          git config user.email "bot@federation"
+          git add data/federation/ || true
+          git diff --cached --quiet || git commit -m "chore: heartbeat state"
+          git push || true
