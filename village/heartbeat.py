@@ -14,6 +14,7 @@ import time
 import urllib.request
 from pathlib import Path
 
+from village.contracts import ContractState, VillageContract
 from village.village_core import (
     CanonicalIngressEvent,
     STATUS_ACCEPTED,
@@ -43,6 +44,13 @@ PROC_GH = DIR / "processed_issues.json"
 PROC_MB = DIR / "processed_comments.json"
 CHALLENGE_STATE = DIR / "challenge_failures.json"
 CONTRIBUTIONS = DIR / "contributions.json"
+# Governance layer for claimed/completed bounties (docs/SPEC.md §C.3.1,
+# village/contracts.py). Only touched by bounty_claim()/bounty_complete()
+# — bounty_create() is not a production integration point (nothing calls
+# it; bounties are created outside the code). Budget/deadline stay
+# unconstrained (None) here — no ingress path supplies that data yet,
+# see docs/research/VILLAGE_CONTRACTS_01.md.
+CONTRACTS = DIR / "contracts.json"
 # Records the Moltbook comment id returned by every successful POST,
 # written immediately after the POST (before/regardless of verify) — see
 # docs/SPEC.md §C.5. There is no GET /comments/{id} endpoint (docs/
@@ -415,6 +423,24 @@ def bounty_list(status: str = "open") -> list[dict]:
     return [b for b in _load(BOUNTIES).get("bounties", []) if b.get("status") == status]
 
 
+def _contract_id_for(bid: str) -> str:
+    return f"contract:{bid}:1"
+
+
+def _load_contract(contract_id: str) -> VillageContract | None:
+    store = _load(CONTRACTS)
+    data = store.get("contracts", {}).get(contract_id)
+    return VillageContract.from_dict(data) if data else None
+
+
+def _save_contract(contract: VillageContract) -> None:
+    store = _load(CONTRACTS)
+    contracts = store.get("contracts", {})
+    contracts[contract.contract_id] = contract.to_dict()
+    store["contracts"] = contracts
+    _save(CONTRACTS, store)
+
+
 def bounty_claim(bid: str, agent: str) -> dict | None:
     board = _load(BOUNTIES)
     for b in board.get("bounties", []):
@@ -423,6 +449,19 @@ def bounty_claim(bid: str, agent: str) -> dict | None:
             b["claimed_by"] = agent
             b["claimed_at"] = time.time()
             _save(BOUNTIES, board)
+
+            # Governance layer (docs/SPEC.md §C.3.1): create-or-load the
+            # bounty's VillageContract, activate it. Budget/deadline stay
+            # unconstrained (None) -- no ingress path supplies that data
+            # yet (docs/research/VILLAGE_CONTRACTS_01.md).
+            contract_id = _contract_id_for(bid)
+            contract = _load_contract(contract_id) or VillageContract(
+                contract_id=contract_id, title=b["title"], description=b["description"]
+            )
+            if contract.state == ContractState.DRAFTED:
+                contract.activate()
+            _save_contract(contract)
+
             return b
     return None
 
@@ -434,6 +473,21 @@ def bounty_complete(bid: str) -> dict | None:
             b["status"] = "done"
             b["completed_at"] = time.time()
             _save(BOUNTIES, board)
+
+            # Governance layer (docs/SPEC.md §C.3.1). No success_criteria
+            # are set today, so fulfill() succeeds trivially -- mirrors
+            # the existing bounty semantics ("someone says it's done")
+            # exactly, adds no new check. A missing contract (e.g. a
+            # bounty claimed before this wiring existed) is skipped
+            # cleanly, not a crash -- see docs/BEFUND.md.
+            contract_id = _contract_id_for(bid)
+            contract = _load_contract(contract_id)
+            if contract is None:
+                print(f"  [contracts] no contract for {bid} (pre-existing claim?) — skipping")
+            elif contract.state == ContractState.ACTIVE:
+                contract.fulfill()
+                _save_contract(contract)
+
             return b
     return None
 
