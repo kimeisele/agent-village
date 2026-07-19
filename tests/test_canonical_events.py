@@ -13,33 +13,55 @@ from village.village_core import (
     sanitize_name,
 )
 
-
 # =============================================================================
 # §E.4 — a Moltbook comment and a GitHub issue produce the same event schema
 # =============================================================================
 
 
 def test_both_surfaces_produce_the_same_event_field_set():
-    mb_event = moltbook_comment_to_event({
-        "id": "c1", "content": "join name: Alice", "author": {"name": "Alice"},
-    })
-    gh_event = github_issue_to_event({
-        "number": 7, "title": "[REGISTRATION] Bob", "body": "",
-        "user": {"login": "Bob"},
-    })
+    mb_event = moltbook_comment_to_event(
+        {
+            "id": "c1",
+            "content": "join name: Alice",
+            "author": {"name": "Alice"},
+        }
+    )
+    gh_event = github_issue_to_event(
+        {
+            "number": 7,
+            "title": "[REGISTRATION] Bob",
+            "body": "",
+            "user": {"login": "Bob"},
+        }
+    )
 
     assert isinstance(mb_event, CanonicalIngressEvent)
     assert isinstance(gh_event, CanonicalIngressEvent)
-    assert set(mb_event.to_dict().keys()) == set(gh_event.to_dict().keys()) == {
-        "event_id", "surface", "external_id", "actor_id", "display_name",
-        "content", "content_sha256", "received_at", "dedup_key",
-    }
+    assert (
+        set(mb_event.to_dict().keys())
+        == set(gh_event.to_dict().keys())
+        == {
+            "event_id",
+            "surface",
+            "external_id",
+            "actor_id",
+            "display_name",
+            "content",
+            "content_sha256",
+            "received_at",
+            "dedup_key",
+        }
+    )
 
 
 def test_moltbook_comment_to_event_fields():
-    event = moltbook_comment_to_event({
-        "id": "c1", "content": "join name: Alice", "author": {"name": "Alice"},
-    })
+    event = moltbook_comment_to_event(
+        {
+            "id": "c1",
+            "content": "join name: Alice",
+            "author": {"name": "Alice"},
+        }
+    )
     assert event.surface == "moltbook"
     assert event.external_id == "c1"
     assert event.actor_id == "Alice"
@@ -49,10 +71,14 @@ def test_moltbook_comment_to_event_fields():
 
 
 def test_github_issue_to_event_fields():
-    event = github_issue_to_event({
-        "number": 7, "title": "[REGISTRATION] Bob", "body": "Agent Name: Bob",
-        "user": {"login": "Bob"},
-    })
+    event = github_issue_to_event(
+        {
+            "number": 7,
+            "title": "[REGISTRATION] Bob",
+            "body": "Agent Name: Bob",
+            "user": {"login": "Bob"},
+        }
+    )
     assert event.surface == "github"
     assert event.external_id == "7"
     assert event.actor_id == "Bob"
@@ -63,9 +89,13 @@ def test_github_issue_to_event_fields():
 
 
 def test_moltbook_actor_id_prefers_platform_id_field_over_name():
-    event = moltbook_comment_to_event({
-        "id": "c1", "content": "hi", "author": {"id": "u_999", "name": "Alice"},
-    })
+    event = moltbook_comment_to_event(
+        {
+            "id": "c1",
+            "content": "hi",
+            "author": {"id": "u_999", "name": "Alice"},
+        }
+    )
     assert event.actor_id == "u_999"
     assert event.display_name == "Alice"
 
@@ -85,4 +115,5 @@ def test_heartbeat_sanitize_name_is_the_core_implementation():
 
 def test_heartbeat_kw_match_is_the_core_implementation():
     from village.village_core import kw_match
+
     assert hb._kw_match is kw_match

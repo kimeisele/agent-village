@@ -29,8 +29,21 @@ def test_claim_comment_does_nothing_when_disabled(monkeypatch, tmp_path):
     monkeypatch.setattr(hb, "MB", "fake-key")
     monkeypatch.setattr(hb, "REG_POST", "post123")
     monkeypatch.setattr(hb, "BOUNTIES", tmp_path / "bounties.json")
-    hb._save(hb.BOUNTIES, {"bounties": [{"id": "b001", "title": "test", "status": "open",
-                                          "claimed_by": None, "claimed_at": None, "completed_at": None}]})
+    hb._save(
+        hb.BOUNTIES,
+        {
+            "bounties": [
+                {
+                    "id": "b001",
+                    "title": "test",
+                    "status": "open",
+                    "claimed_by": None,
+                    "claimed_at": None,
+                    "completed_at": None,
+                }
+            ]
+        },
+    )
 
     claim_calls = []
     monkeypatch.setattr(hb, "bounty_claim", lambda *a, **k: claim_calls.append(a) or None)
@@ -39,10 +52,17 @@ def test_claim_comment_does_nothing_when_disabled(monkeypatch, tmp_path):
     monkeypatch.setattr(hb, "_post_comment_verified", lambda *a, **k: post_calls.append(a) or {"verified": True})
 
     monkeypatch.setattr(
-        hb, "_mb",
-        lambda path, method="GET", body=None: _comments_response({
-            "id": "c1", "content": "I claim b001", "author": {"name": "SomeAgent"},
-        }) if "comments" in path and method == "GET" else {"success": True},
+        hb,
+        "_mb",
+        lambda path, method="GET", body=None: _comments_response(
+            {
+                "id": "c1",
+                "content": "I claim b001",
+                "author": {"name": "SomeAgent"},
+            }
+        )
+        if "comments" in path and method == "GET"
+        else {"success": True},
     )
 
     result = hb.scan_moltbook()
@@ -68,10 +88,17 @@ def test_claim_comment_proceeds_when_enabled(monkeypatch, tmp_path):
     monkeypatch.setattr(hb, "_post_comment_verified", lambda *a, **k: {"verified": True})
 
     monkeypatch.setattr(
-        hb, "_mb",
-        lambda path, method="GET", body=None: _comments_response({
-            "id": "c1", "content": "I claim b001", "author": {"name": "SomeAgent"},
-        }) if "comments" in path and method == "GET" else {"success": True},
+        hb,
+        "_mb",
+        lambda path, method="GET", body=None: _comments_response(
+            {
+                "id": "c1",
+                "content": "I claim b001",
+                "author": {"name": "SomeAgent"},
+            }
+        )
+        if "comments" in path and method == "GET"
+        else {"success": True},
     )
 
     result = hb.scan_moltbook()
@@ -92,10 +119,17 @@ def test_done_comment_does_nothing_when_disabled(monkeypatch, tmp_path):
     monkeypatch.setattr(hb, "_post_comment_verified", lambda *a, **k: post_calls.append(a) or {"verified": True})
 
     monkeypatch.setattr(
-        hb, "_mb",
-        lambda path, method="GET", body=None: _comments_response({
-            "id": "c2", "content": "done b001", "author": {"name": "SomeAgent"},
-        }) if "comments" in path and method == "GET" else {"success": True},
+        hb,
+        "_mb",
+        lambda path, method="GET", body=None: _comments_response(
+            {
+                "id": "c2",
+                "content": "done b001",
+                "author": {"name": "SomeAgent"},
+            }
+        )
+        if "comments" in path and method == "GET"
+        else {"success": True},
     )
 
     result = hb.scan_moltbook()

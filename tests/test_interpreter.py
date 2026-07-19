@@ -15,7 +15,6 @@ from village.interpreter import (
     tolerant_parse,
 )
 
-
 # ── Stage (a): marked block extraction ────────────────────────────────────
 
 

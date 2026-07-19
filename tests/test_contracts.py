@@ -245,9 +245,7 @@ def test_child_budget_dimension_parent_leaves_unconstrained_is_rejected():
     """Fail closed: a child must not introduce a budget dimension the
     parent never agreed to govern."""
     parent = _b001_contract()  # no cognitive_units limit set
-    violations = validate_child_budget(
-        parent, VillageContract(contract_id="c", budget=Budget(cognitive_units=10))
-    )
+    violations = validate_child_budget(parent, VillageContract(contract_id="c", budget=Budget(cognitive_units=10)))
     assert violations == ["cognitive_units"]
 
 

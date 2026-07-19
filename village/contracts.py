@@ -114,10 +114,11 @@ class Budget:
     def remaining(self, dimension: str) -> float | None:
         if dimension not in _BUDGET_DIMENSIONS:
             raise ValueError(f"unknown budget dimension: {dimension}")
-        limit = getattr(self, dimension)
+        limit: float | None = getattr(self, dimension)
         if limit is None:
             return None
-        return limit - getattr(self, f"used_{dimension}")
+        used: float = getattr(self, f"used_{dimension}")
+        return limit - used
 
     def record_usage(self, **amounts: float) -> None:
         for dim, amount in amounts.items():
@@ -202,7 +203,7 @@ class VillageContract:
 
     def __post_init__(self) -> None:
         self.deadline = normalize_datetime(self.deadline)
-        self.created_at = normalize_datetime(self.created_at)
+        self.created_at = normalize_datetime(self.created_at) or _now()
 
     # ── Resource whitelist ────────────────────────────────────────
     def is_resource_permitted(self, resource: str) -> bool:
@@ -212,7 +213,7 @@ class VillageContract:
     def is_past_deadline(self, now: datetime | None = None) -> bool:
         if self.deadline is None:
             return False
-        current = normalize_datetime(now) if now is not None else _now()
+        current = _now() if now is None else normalize_datetime(now) or _now()
         return current > self.deadline
 
     # ── Budget ────────────────────────────────────────────────────

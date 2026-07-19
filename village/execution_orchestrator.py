@@ -31,6 +31,7 @@ This module stops the moment a submission exists.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import village.heartbeat as heartbeat
 from village.bounty_review import bounty_submit
@@ -56,12 +57,14 @@ class ExecutionOutcome:
     accepted: bool
     reason: str | None
     work_result: WorkResult | None
-    submission: dict | None
+    submission: dict[str, Any] | None
 
 
-def _find_bounty(board: dict, bounty_id: str) -> dict | None:
+def _find_bounty(board: dict[str, Any], bounty_id: str) -> dict[str, Any] | None:
     for b in board.get("bounties", []):
         if b["id"] == bounty_id:
+            if not isinstance(b, dict):
+                raise ValueError(f"bounty record is not a dict: {type(b).__name__}")
             return b
     return None
 

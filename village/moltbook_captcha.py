@@ -51,7 +51,7 @@ import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Dict, Final, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Final, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger("MOLTBOOK_CAPTCHA")
 
@@ -71,7 +71,7 @@ class ChallengeMonitor:
     BAN_THRESHOLD = 10  # Max allowed failures before ban
     HALT_THRESHOLD = 5  # Stop attempting after this many consecutive failures
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._consecutive_failures: int = 0
         self._total_attempts: int = 0
         self._total_successes: int = 0
@@ -137,7 +137,7 @@ class ChallengeMonitor:
         self._last_challenge_format = fmt
         return False
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, Any]:
         """Return monitoring stats for diagnostics."""
         return {
             "total_attempts": self._total_attempts,
@@ -148,7 +148,7 @@ class ChallengeMonitor:
             "halted": self._halted,
         }
 
-    def to_state(self) -> dict:
+    def to_state(self) -> dict[str, Any]:
         """Serialize counters for cross-process/cross-cycle persistence.
 
         New code, not ported — the source ChallengeMonitor was designed for
@@ -167,7 +167,7 @@ class ChallengeMonitor:
             "halted": self._halted,
         }
 
-    def load_state(self, state: dict) -> None:
+    def load_state(self, state: dict[str, Any]) -> None:
         """Restore counters from a persisted dict. See to_state()."""
         self._consecutive_failures = state.get("consecutive_failures", 0)
         self._total_attempts = state.get("total_attempts", 0)
@@ -344,7 +344,7 @@ class ChallengeSolver:
             "ninety": 90,
         }
 
-        def _resolve_compound(m: re.Match) -> str:
+        def _resolve_compound(m: re.Match[str]) -> str:
             return str(_TENS[m.group(1)] + _UNITS[m.group(2)])
 
         text = _HYPHEN_COMPOUNDS.sub(_resolve_compound, text)
@@ -444,28 +444,65 @@ class CaptchaCandidate:
 
 
 _NUMBER_WORDS: Final[Dict[str, int]] = {
-    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
-    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
-    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
-    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
-    "seventy": 70, "eighty": 80, "ninety": 90, "hundred": 100, "thousand": 1000,
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
+    "hundred": 100,
+    "thousand": 1000,
 }
 
 _OPERATOR_WORDS: Final[Dict[str, str]] = {
-    "plus": "+", "add": "+", "sum": "+",
-    "minus": "-", "subtract": "-", "difference": "-",
-    "times": "*", "multiply": "*",
-    "divided": "/", "divide": "/",
-    "modulo": "%", "mod": "%", "remainder": "%",
+    "plus": "+",
+    "add": "+",
+    "sum": "+",
+    "minus": "-",
+    "subtract": "-",
+    "difference": "-",
+    "times": "*",
+    "multiply": "*",
+    "divided": "/",
+    "divide": "/",
+    "modulo": "%",
+    "mod": "%",
+    "remainder": "%",
     # Added after BEFUND.md §5 / live E2E test: these must be in the
     # reconstruction vocabulary, not just _extract_math's trigger-word
     # list — without a vocab entry, _pada_collapse/_pada_aggressive have no
     # reason to reassemble them and they stay as unrecognized fragments
     # (e.g. "acceeleratesby"), so the trigger-word substring check on the
     # decoded text never finds them either.
-    "gains": "+", "gain": "+", "accelerates": "+",
-    "loses": "-", "lose": "-", "looses": "-", "decelerates": "-",
+    "gains": "+",
+    "gain": "+",
+    "accelerates": "+",
+    "loses": "-",
+    "lose": "-",
+    "looses": "-",
+    "decelerates": "-",
 }
 
 _CONTEXT_WORDS: Final[Tuple[str, ...]] = ("total", "combined", "altogether", "together", "and")
@@ -476,7 +513,7 @@ _CONTEXT_WORDS: Final[Tuple[str, ...]] = ("total", "combined", "altogether", "to
 # vocabulary membership (dict/set), never the coordinate values themselves,
 # except in the fuzzy step — which now uses difflib instead. So this is a
 # plain word set, no phonetic encoding, no lazy RAMA init.
-_VOCAB_WORDS: set = set()
+_VOCAB_WORDS: set[str] = set[str]()
 _VOCAB_COLLAPSED: Dict[str, str] = {}
 _vocab_initialized: bool = False
 
@@ -497,7 +534,7 @@ def _ensure_vocab() -> None:
 
 def _varna_filter(text: str) -> str:
     """Noise strip. Alpha → lowercase, digits survive, rest → space."""
-    result: list = []
+    result: list[str] = []
     for ch in text:
         if ch.isalpha():
             result.append(ch.lower())
@@ -512,7 +549,7 @@ def _akshara_collapse(text: str) -> str:
     """Collapse runs of 3+ identical chars → single. Preserves doubles (ee in three)."""
     if len(text) < 3:
         return text
-    result: list = []
+    result: list[str] = []
     i = 0
     while i < len(text):
         ch = text[i]
@@ -542,7 +579,7 @@ def _collapse_all(s: str) -> str:
 def _pada_exact(tokens: List[str], max_window: int = 6) -> List[str]:
     """Reassemble fragments using exact vocabulary match only."""
     _ensure_vocab()
-    result: list = []
+    result: list[str] = []
     i = 0
     while i < len(tokens):
         best_word: Optional[str] = None
@@ -572,12 +609,12 @@ def _pada_collapse(tokens: List[str], max_window: int = 8) -> List[str]:
         return []
 
     _WORST: Tuple[int, int] = (-1, -n - 1)
-    dp: list = [(_WORST, [])] * (n + 1)
+    dp: list[tuple[tuple[int, int], list[str]]] = [(_WORST, [])] * (n + 1)
     dp[n] = ((0, 0), [])
 
     for i in range(n - 1, -1, -1):
         best_score = _WORST
-        best_words: list = []
+        best_words: list[str] = []
         mw = min(max_window, n - i)
 
         for w in range(1, mw + 1):
@@ -614,18 +651,18 @@ def _pada_collapse(tokens: List[str], max_window: int = 8) -> List[str]:
 
         dp[i] = (best_score, best_words)
 
-    result = dp[0][1]
+    result: list[str] = dp[0][1]
 
-    final: list = []
-    for w in result:
-        if w in _VOCAB_WORDS:
-            final.append(w)
+    final: list[str] = []
+    for token in result:
+        if token in _VOCAB_WORDS:
+            final.append(token)
         else:
-            collapsed = _collapse_all(w)
+            collapsed = _collapse_all(token)
             if collapsed in _VOCAB_COLLAPSED:
                 final.append(_VOCAB_COLLAPSED[collapsed])
             else:
-                final.append(w)
+                final.append(token)
     return final
 
 
@@ -648,12 +685,12 @@ def _pada_aggressive(tokens: List[str], max_window: int = 10) -> List[str]:
         return []
 
     _WORST: Tuple[int, int] = (-1, -n - 1)
-    dp: list = [(_WORST, [])] * (n + 1)
+    dp: list[tuple[tuple[int, int], list[str]]] = [(_WORST, [])] * (n + 1)
     dp[n] = ((0, 0), [])
 
     for i in range(n - 1, -1, -1):
         best_score = _WORST
-        best_words: list = []
+        best_words: list[str] = []
         mw = min(max_window, n - i)
 
         for w in range(1, mw + 1):
@@ -703,25 +740,25 @@ def _pada_aggressive(tokens: List[str], max_window: int = 10) -> List[str]:
 
         dp[i] = (best_score, best_words)
 
-    result = dp[0][1]
+    result: list[str] = dp[0][1]
 
-    final: list = []
-    for w in result:
-        if w in _VOCAB_WORDS:
-            final.append(w)
+    final: list[str] = []
+    for token in result:
+        if token in _VOCAB_WORDS:
+            final.append(token)
         else:
-            collapsed = _collapse_all(w)
+            collapsed = _collapse_all(token)
             if collapsed in _VOCAB_COLLAPSED:
                 final.append(_VOCAB_COLLAPSED[collapsed])
             else:
-                final.append(w)
+                final.append(token)
     return final
 
 
-_TENS_WORDS: Final[frozenset] = frozenset(
+_TENS_WORDS: Final[frozenset[str]] = frozenset[str](
     {"twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"}
 )
-_ONES_WORDS: Final[frozenset] = frozenset(
+_ONES_WORDS: Final[frozenset[str]] = frozenset[str](
     {"one", "two", "three", "four", "five", "six", "seven", "eight", "nine"}
 )
 
@@ -733,7 +770,7 @@ def _merge_compounds(words: List[str]) -> List[str]:
     This step restores them: ["eighty", "four"] → ["eighty-four"].
     ChallengeSolver._normalize_text then handles "eighty-four" → "84".
     """
-    result: list = []
+    result: list[str] = []
     i = 0
     while i < len(words):
         if i + 1 < len(words) and words[i] in _TENS_WORDS and words[i + 1] in _ONES_WORDS:
@@ -758,7 +795,10 @@ def _extract_math(decoded_text: str) -> Optional[str]:
     if not numbers:
         return None
     if len(numbers) == 1:
-        return numbers[0]
+        result = numbers[0]
+        if not isinstance(result, str):
+            return None
+        return result
 
     text_lower = decoded_text.lower()
 
@@ -816,8 +856,8 @@ def _strategy_exact(challenge: str) -> List[CaptchaCandidate]:
     clean = _varna_filter(challenge)
     clean = _akshara_collapse(clean)
     tokens = clean.split()
-    results: list = []
-    seen_answers: set = set()
+    results: list[CaptchaCandidate] = []
+    seen_answers: set[str] = set[str]()
     for w in (4, 6, 8):
         words = _merge_compounds(_pada_exact(tokens, max_window=w))
         decoded = " ".join(words)
@@ -837,8 +877,8 @@ def _strategy_collapse(challenge: str) -> List[CaptchaCandidate]:
     clean = _varna_filter(challenge)
     clean = _akshara_collapse(clean)
     tokens = clean.split()
-    results: list = []
-    seen_answers: set = set()
+    results: list[CaptchaCandidate] = []
+    seen_answers: set[str] = set[str]()
     for w in (6, 8, 10):
         words = _merge_compounds(_pada_collapse(tokens, max_window=w))
         decoded = " ".join(words)
@@ -849,7 +889,9 @@ def _strategy_collapse(challenge: str) -> List[CaptchaCandidate]:
         if answer is None or answer in seen_answers:
             continue
         seen_answers.add(answer)
-        results.append(CaptchaCandidate(answer=answer, expression=expr, decoded_text=decoded, strategy=f"collapse_w{w}"))
+        results.append(
+            CaptchaCandidate(answer=answer, expression=expr, decoded_text=decoded, strategy=f"collapse_w{w}")
+        )
     return results
 
 
@@ -858,8 +900,8 @@ def _strategy_aggressive(challenge: str) -> List[CaptchaCandidate]:
     clean = _varna_filter(challenge)
     clean = _akshara_collapse(clean)
     tokens = clean.split()
-    results: list = []
-    seen_answers: set = set()
+    results: list[CaptchaCandidate] = []
+    seen_answers: set[str] = set[str]()
     for w in (8, 10, 12):
         words = _merge_compounds(_pada_aggressive(tokens, max_window=w))
         decoded = " ".join(words)
@@ -870,7 +912,9 @@ def _strategy_aggressive(challenge: str) -> List[CaptchaCandidate]:
         if answer is None or answer in seen_answers:
             continue
         seen_answers.add(answer)
-        results.append(CaptchaCandidate(answer=answer, expression=expr, decoded_text=decoded, strategy=f"aggressive_w{w}"))
+        results.append(
+            CaptchaCandidate(answer=answer, expression=expr, decoded_text=decoded, strategy=f"aggressive_w{w}")
+        )
     return results
 
 
@@ -899,7 +943,9 @@ def _score_expression(candidate: CaptchaCandidate, _challenge: str) -> float:
     return 0.0
 
 
-def _score_consensus(candidate: CaptchaCandidate, _challenge: str, all_candidates: Sequence[CaptchaCandidate] = ()) -> float:
+def _score_consensus(
+    candidate: CaptchaCandidate, _challenge: str, all_candidates: Sequence[CaptchaCandidate] = ()
+) -> float:
     """How many strategies agree on this answer?"""
     if len(all_candidates) < 2:
         return 0.25
@@ -1041,13 +1087,19 @@ class CaptchaChamber:
 
         logger.debug(
             "CaptchaChamber: best=%s score=%.2f scores=%s strategies=%d",
-            best.answer, best.total_score, best.scores, len(candidates),
+            best.answer,
+            best.total_score,
+            best.scores,
+            len(candidates),
         )
 
         if best.total_score < CONFIDENCE_THRESHOLD:
             logger.warning(
                 "CaptchaChamber: low confidence (%.2f < %.2f), skipping. Best candidate: answer=%s strategy=%s",
-                best.total_score, CONFIDENCE_THRESHOLD, best.answer, best.strategy,
+                best.total_score,
+                CONFIDENCE_THRESHOLD,
+                best.answer,
+                best.strategy,
             )
             return None
 
@@ -1124,7 +1176,7 @@ def _deepseek_solve(challenge_text: str) -> Optional[str]:
 # =============================================================================
 
 
-def solve_and_verify(mb_call, verification: dict) -> dict:
+def solve_and_verify(mb_call: Any, verification: dict[str, Any]) -> dict[str, Any]:
     """Solve a Moltbook verify challenge and submit it to POST /api/v1/verify.
 
     Args:
@@ -1186,7 +1238,9 @@ def solve_and_verify(mb_call, verification: dict) -> dict:
         monitor.record_success()
         logger.info(
             "solve_and_verify: solved (llm_fallback=%s). challenge=%r answer=%s",
-            used_llm_fallback, challenge_text, answer_str,
+            used_llm_fallback,
+            challenge_text,
+            answer_str,
         )
         return {"solved": True, "answer": answer_str, "used_llm_fallback": used_llm_fallback, "response": resp}
 
@@ -1199,7 +1253,10 @@ def solve_and_verify(mb_call, verification: dict) -> dict:
     # for good). Log the full text; it's never excessively long.
     logger.warning(
         "solve_and_verify: verify call failed (llm_fallback=%s). challenge=%r answer=%s response=%r",
-        used_llm_fallback, challenge_text, answer_str, resp,
+        used_llm_fallback,
+        challenge_text,
+        answer_str,
+        resp,
     )
     return {
         "solved": False,

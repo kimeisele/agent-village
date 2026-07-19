@@ -11,9 +11,13 @@ from village.village_core import moltbook_comment_to_event
 
 def test_record_contribution_upserts_not_appends(monkeypatch, tmp_path):
     monkeypatch.setattr(hb, "CONTRIBUTIONS", tmp_path / "contributions.json")
-    event = moltbook_comment_to_event({
-        "id": "c1", "content": "join", "author": {"name": "Alice"},
-    })
+    event = moltbook_comment_to_event(
+        {
+            "id": "c1",
+            "content": "join",
+            "author": {"name": "Alice"},
+        }
+    )
 
     hb._record_contribution(event, "join", hb.STATUS_RECEIVED)
     hb._record_contribution(event, "join", hb.STATUS_RECEIVED)  # identical retry
@@ -57,13 +61,17 @@ def test_identical_registration_retry_via_scan_moltbook_yields_one_contribution(
 
     join_comment = {"id": "c1", "content": "join", "author": {"name": "B_ClawAssistant"}}
     monkeypatch.setattr(
-        hb, "_mb",
+        hb,
+        "_mb",
         lambda path, method="GET", body=None: (
-            {"success": True, "comments": [join_comment]} if "comments" in path and method == "GET" else {"success": True}
+            {"success": True, "comments": [join_comment]}
+            if "comments" in path and method == "GET"
+            else {"success": True}
         ),
     )
     monkeypatch.setattr(
-        hb, "_post_comment_verified",
+        hb,
+        "_post_comment_verified",
         lambda *a, **k: {"posted": True, "verified": False, "reason": "verify_rejected"},
     )
 
@@ -94,15 +102,19 @@ def test_registration_confirmed_on_retry_reaches_materialized(monkeypatch, tmp_p
 
     join_comment = {"id": "c1", "content": "join", "author": {"name": "B_ClawAssistant"}}
     monkeypatch.setattr(
-        hb, "_mb",
+        hb,
+        "_mb",
         lambda path, method="GET", body=None: (
-            {"success": True, "comments": [join_comment]} if "comments" in path and method == "GET" else {"success": True}
+            {"success": True, "comments": [join_comment]}
+            if "comments" in path and method == "GET"
+            else {"success": True}
         ),
     )
 
     # Run 1: reply not verified -> pending, contribution "received".
     monkeypatch.setattr(
-        hb, "_post_comment_verified",
+        hb,
+        "_post_comment_verified",
         lambda *a, **k: {"posted": True, "verified": False, "reason": "verify_rejected"},
     )
     hb.scan_moltbook()
@@ -131,12 +143,15 @@ def test_bounty_claim_confirmed_on_retry_reaches_materialized(monkeypatch, tmp_p
     monkeypatch.setattr(hb, "CONTRIBUTIONS", tmp_path / "contributions.json")
     monkeypatch.setattr(hb, "MB", "fake-key")
     monkeypatch.setattr(hb, "REG_POST", "post123")
-    hb._save(hb.PENDING_MB, {
-        "registration": {},
-        "bounty_claim": {"c2": {"bid": "b001", "sender": "SomeAgent", "title": "Test bounty", "attempts": 1}},
-        "bounty_reject": {},
-        "bounty_done": {},
-    })
+    hb._save(
+        hb.PENDING_MB,
+        {
+            "registration": {},
+            "bounty_claim": {"c2": {"bid": "b001", "sender": "SomeAgent", "title": "Test bounty", "attempts": 1}},
+            "bounty_reject": {},
+            "bounty_done": {},
+        },
+    )
     monkeypatch.setattr(hb, "_mb", lambda path, method="GET", body=None: {"success": True, "comments": []})
     monkeypatch.setattr(hb, "_post_comment_verified", lambda *a, **k: {"posted": True, "verified": True})
 

@@ -36,10 +36,15 @@ def main() -> int:
 
     if not os.environ.get(DEEPSEEK_API_KEY_VAR):
         print(f"::error::{DEEPSEEK_API_KEY_VAR} not set -- clean skip, not a fake success.")
-        evidence_path.write_text(json.dumps({
-            "status": "SKIPPED_NO_SECRET",
-            "reason": f"{DEEPSEEK_API_KEY_VAR} not set",
-        }, indent=2))
+        evidence_path.write_text(
+            json.dumps(
+                {
+                    "status": "SKIPPED_NO_SECRET",
+                    "reason": f"{DEEPSEEK_API_KEY_VAR} not set",
+                },
+                indent=2,
+            )
+        )
         return 1
 
     target_path = Path(target_file)

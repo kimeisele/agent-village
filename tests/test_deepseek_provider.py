@@ -73,10 +73,13 @@ def test_missing_api_key_raises_auth_error_without_calling_network(monkeypatch):
 
 
 def test_content_only_response(monkeypatch):
-    _mock_success(monkeypatch, {
-        "choices": [{"message": {"content": '{"gaps": []}'}, "finish_reason": "stop"}],
-        "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
-    })
+    _mock_success(
+        monkeypatch,
+        {
+            "choices": [{"message": {"content": '{"gaps": []}'}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
+        },
+    )
     provider = dsp.DeepSeekProvider(model="deepseek-v4-flash", api_key=FAKE_SECRET)
 
     resp = provider.complete("analyze this", max_tokens=100, timeout_seconds=5)
@@ -98,16 +101,23 @@ def test_reasoning_content_field_is_captured_separately(monkeypatch):
     https://api-docs.deepseek.com/api/create-chat-completion, and must
     be surfaced as its own field, not merged into or confused with
     visible_text."""
-    _mock_success(monkeypatch, {
-        "choices": [{
-            "message": {"content": "", "reasoning_content": "internal thinking trace here"},
-            "finish_reason": "length",
-        }],
-        "usage": {
-            "prompt_tokens": 100, "completion_tokens": 2000, "total_tokens": 2100,
-            "completion_tokens_details": {"reasoning_tokens": 2000},
+    _mock_success(
+        monkeypatch,
+        {
+            "choices": [
+                {
+                    "message": {"content": "", "reasoning_content": "internal thinking trace here"},
+                    "finish_reason": "length",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 2000,
+                "total_tokens": 2100,
+                "completion_tokens_details": {"reasoning_tokens": 2000},
+            },
         },
-    })
+    )
     provider = dsp.DeepSeekProvider(api_key=FAKE_SECRET)
 
     resp = provider.complete("analyze this", max_tokens=2000, timeout_seconds=5)
@@ -121,10 +131,13 @@ def test_reasoning_content_field_is_captured_separately(monkeypatch):
 
 def test_finish_reason_is_always_surfaced(monkeypatch):
     for reason in ("stop", "length", "content_filter"):
-        _mock_success(monkeypatch, {
-            "choices": [{"message": {"content": "x"}, "finish_reason": reason}],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-        })
+        _mock_success(
+            monkeypatch,
+            {
+                "choices": [{"message": {"content": "x"}, "finish_reason": reason}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
         provider = dsp.DeepSeekProvider(api_key=FAKE_SECRET)
         resp = provider.complete("x", max_tokens=10, timeout_seconds=5)
         assert resp.finish_reason == reason
@@ -134,10 +147,13 @@ def test_missing_reasoning_content_field_defaults_to_none(monkeypatch):
     """Older/non-thinking responses simply omit the field -- must not
     error, must not become an empty string that's indistinguishable from
     "the model reasoned and produced nothing"."""
-    _mock_success(monkeypatch, {
-        "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
-        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-    })
+    _mock_success(
+        monkeypatch,
+        {
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
     provider = dsp.DeepSeekProvider(api_key=FAKE_SECRET)
     resp = provider.complete("x", max_tokens=10, timeout_seconds=5)
     assert resp.reasoning_text is None
@@ -151,10 +167,14 @@ def test_thinking_mode_is_disabled_by_default(monkeypatch):
 
     def fake_urlopen(req, timeout=None):
         captured_body.update(json.loads(req.data))
-        return _FakeHTTPResponse(json.dumps({
-            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-        }).encode())
+        return _FakeHTTPResponse(
+            json.dumps(
+                {
+                    "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }
+            ).encode()
+        )
 
     monkeypatch.setattr(dsp.urllib.request, "urlopen", fake_urlopen)
     provider = dsp.DeepSeekProvider(api_key=FAKE_SECRET)
@@ -168,10 +188,14 @@ def test_thinking_mode_can_be_explicitly_enabled(monkeypatch):
 
     def fake_urlopen(req, timeout=None):
         captured_body.update(json.loads(req.data))
-        return _FakeHTTPResponse(json.dumps({
-            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-        }).encode())
+        return _FakeHTTPResponse(
+            json.dumps(
+                {
+                    "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }
+            ).encode()
+        )
 
     monkeypatch.setattr(dsp.urllib.request, "urlopen", fake_urlopen)
     provider = dsp.DeepSeekProvider(api_key=FAKE_SECRET, thinking_enabled=True)
@@ -284,6 +308,7 @@ def test_api_key_never_appears_in_any_raised_exception(monkeypatch, capsys):
 
     def fake_urlopen(req, timeout=None):
         return _FakeHTTPResponse(b"not json")
+
     monkeypatch.setattr(dsp.urllib.request, "urlopen", fake_urlopen)
     try:
         provider.complete("x", max_tokens=10, timeout_seconds=5)
@@ -316,10 +341,13 @@ def test_api_key_never_appears_in_the_cognitive_response_object(monkeypatch):
     it only ever appears in the outgoing request's Authorization header,
     never in anything DeepSeek echoes back. Checked across both
     content-only and reasoning-bearing responses."""
-    _mock_success(monkeypatch, {
-        "choices": [{"message": {"content": "ok", "reasoning_content": "thinking..."}, "finish_reason": "stop"}],
-        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-    })
+    _mock_success(
+        monkeypatch,
+        {
+            "choices": [{"message": {"content": "ok", "reasoning_content": "thinking..."}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
     provider = dsp.DeepSeekProvider(api_key=FAKE_SECRET)
     resp = provider.complete("x", max_tokens=10, timeout_seconds=5)
 

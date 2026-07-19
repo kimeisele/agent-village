@@ -103,22 +103,31 @@ def _safe_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
             return cleaned
         return value
 
-    return _clean(evidence)
+    result = _clean(evidence)
+    if not isinstance(result, dict):
+        raise ValueError(f"_safe_evidence: expected dict result, got {type(result).__name__}")
+    return result
 
 
-def _find_bounty(board: dict, bounty_id: str) -> dict | None:
+def _find_bounty(board: dict[str, Any], bounty_id: str) -> dict[str, Any] | None:
     for b in board.get("bounties", []):
         if b["id"] == bounty_id:
+            if not isinstance(b, dict):
+                raise ValueError(f"bounty record is not a dict: {type(b).__name__}")
             return b
     return None
 
 
-def _load_submissions() -> dict:
+def _load_submissions() -> dict[str, Any]:
     return _load(SUBMISSIONS)
 
 
-def _get_submission(submission_id: str) -> dict | None:
-    return _load_submissions().get("submissions", {}).get(submission_id)
+def _get_submission(submission_id: str) -> dict[str, Any] | None:
+    submissions_raw = _load_submissions().get("submissions", {})
+    if not isinstance(submissions_raw, dict):
+        return None
+    sub = submissions_raw.get(submission_id)
+    return sub if isinstance(sub, dict) else None
 
 
 def _next_submission_id(bounty_id: str, execution_id: str) -> str:
@@ -140,7 +149,7 @@ def _next_submission_id(bounty_id: str, execution_id: str) -> str:
     return f"{base}:r{revision}"
 
 
-def _insert_submission(submission: dict) -> None:
+def _insert_submission(submission: dict[str, Any]) -> None:
     """Immutable insert: refuses to overwrite an existing submission_id.
     The ONLY way a new submission record enters storage -- callers must
     obtain a guaranteed-fresh id from `_next_submission_id()` first, and
@@ -158,7 +167,7 @@ def _insert_submission(submission: dict) -> None:
     _save(SUBMISSIONS, store)
 
 
-def _attach_review(submission_id: str, review_record: dict) -> dict:
+def _attach_review(submission_id: str, review_record: dict[str, Any]) -> dict[str, Any]:
     """Attach a review verdict to an existing submission -- the one
     legitimate in-place update this module makes, and only once: refuses
     if the submission already has a review (defense in depth on top of
@@ -180,7 +189,7 @@ def _attach_review(submission_id: str, review_record: dict) -> dict:
 
 
 # ── Submission ────────────────────────────────────────────────────────────
-def bounty_submit(bounty_id: str, actor_id: str, work_result: WorkResult) -> dict | None:
+def bounty_submit(bounty_id: str, actor_id: str, work_result: WorkResult) -> dict[str, Any] | None:
     """Submit a worker's WorkResult as evidence for a claimed bounty.
 
     Never marks the bounty `done`, never calls `contract.fulfill()` --
@@ -256,7 +265,7 @@ _VALID_DECISIONS = ("accept", "reject")
 
 def bounty_review(
     bounty_id: str, reviewer_actor_id: str, decision: str, evidence: dict[str, Any] | None = None
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Record a review decision for a `submitted` bounty. The ONLY
     function in this codebase that may set a bounty to `done` or call
     `contract.fulfill()`.
@@ -299,8 +308,11 @@ def bounty_review(
     if contract is None:
         return None
 
-    submission_id = bounty.get("current_submission_id")
-    submission = _get_submission(submission_id) if submission_id else None
+    submission_id_raw = bounty.get("current_submission_id")
+    if not isinstance(submission_id_raw, str) or not submission_id_raw:
+        return None
+    submission_id: str = submission_id_raw
+    submission = _get_submission(submission_id)
     if submission is None:
         return None
 
@@ -318,7 +330,7 @@ def bounty_review(
         # preserved, not deleted or overwritten by a later resubmit --
         # _next_submission_id() guarantees the next submit() gets its own
         # fresh id.
-        _attach_review(submission_id, review_record)
+        _attach_review(str(submission_id), review_record)
 
         bounty["status"] = "claimed"
         _save(heartbeat.BOUNTIES, board)
@@ -332,7 +344,7 @@ def bounty_review(
     except ValueError:
         return None
 
-    _attach_review(submission_id, review_record)
+    _attach_review(str(submission_id), review_record)
     _save_contract(contract)
 
     bounty["status"] = "done"

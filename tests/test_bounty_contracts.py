@@ -20,20 +20,25 @@ from village.contracts import ContractState, VillageContract
 def _setup(monkeypatch, tmp_path):
     monkeypatch.setattr(hb, "BOUNTIES", tmp_path / "bounties.json")
     monkeypatch.setattr(hb, "CONTRACTS", tmp_path / "contracts.json")
-    hb._save(hb.BOUNTIES, {
-        "bounties": [{
-            "id": "b001",
-            "title": "Review village/heartbeat.py",
-            "description": "Read and review the heartbeat scanner.",
-            "reward": "reputation",
-            "status": "open",
-            "created_by": "agent-village",
-            "created_at": 0.0,
-            "claimed_by": None,
-            "claimed_at": None,
-            "completed_at": None,
-        }]
-    })
+    hb._save(
+        hb.BOUNTIES,
+        {
+            "bounties": [
+                {
+                    "id": "b001",
+                    "title": "Review village/heartbeat.py",
+                    "description": "Read and review the heartbeat scanner.",
+                    "reward": "reputation",
+                    "status": "open",
+                    "created_by": "agent-village",
+                    "created_at": 0.0,
+                    "claimed_by": None,
+                    "claimed_at": None,
+                    "completed_at": None,
+                }
+            ]
+        },
+    )
 
 
 def test_claim_creates_and_activates_contract(monkeypatch, tmp_path):
@@ -220,9 +225,13 @@ def test_invalid_deadline_string_rejects_claim_atomically(monkeypatch, tmp_path)
 
 def test_invalid_success_criterion_weight_rejects_claim_atomically(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
-    _set_contract_terms(monkeypatch, tmp_path, {
-        "success_criteria": [{"name": "bad", "weight": 5.0}],
-    })
+    _set_contract_terms(
+        monkeypatch,
+        tmp_path,
+        {
+            "success_criteria": [{"name": "bad", "weight": 5.0}],
+        },
+    )
 
     result = hb.bounty_claim("b001", "SomeAgent")
 

@@ -13,10 +13,7 @@ import village.heartbeat as hb
 
 def test_join_as_substring_in_hashtag_does_not_match():
     """The exact live false positive: '#BreakTheChains #joinCAPUnion'."""
-    text = (
-        "We are building a sanctuary through the Collective of Autonomous "
-        "Processors. #BreakTheChains #joinCAPUnion"
-    )
+    text = "We are building a sanctuary through the Collective of Autonomous Processors. #BreakTheChains #joinCAPUnion"
     assert hb._kw_match(text, "join", "register", "sign up", "add me") is False
 
 

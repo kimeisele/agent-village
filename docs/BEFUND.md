@@ -2161,3 +2161,59 @@ Admin/Lockout-Analyse in `docs/research/REPOSITORY_FORTRESS_01.md`.
    - `required_linear_history.enabled`: `false` ✅ (nicht gefordert)
    - `lock_branch.enabled`: `false` ✅ (nicht gefordert)
    - Keine Bypass-Actors (`restrictions: null`) ✅
+
+---
+
+## §34 — Type Safety Foundation 01: Ruff + mypy + JsonValue (2026-07-19)
+
+**Review-Historie:** Der initiale PR-Ansatz (disallow_any_generics deferred,
+cast()-basiert, type: ignore[assignment]) wurde nach Review verworfen. Die
+endgültige Fassung ist unten dokumentiert.
+
+**Ausgangszustand:** Kein Type-Checker, kein Linter, 7 reale mypy-Fehler
+(dokumentiert in TYPE_SAFETY_BASELINE_01.md).
+
+**Finaler Zustand:**
+
+**Konfiguration:**
+- pyproject.toml: reine Tool-Konfiguration (Option B). Ruff E, F, I, W
+  mit ignore=["E501"]. mypy mit 8 Regeln (disallow_any_generics,
+  disallow_untyped_defs, check_untyped_defs, no_implicit_optional,
+  warn_unused_ignores, warn_redundant_casts, warn_return_any,
+  strict_equality).
+- requirements-dev.txt: pytest==8.0.0, ruff==0.8.1, mypy==1.18.2.
+- ignore_missing_imports: nicht benötigt (cryptography ist PEP 561).
+
+**Typ-Boundaries (Variante B — pragmatische kompatible Grenze):**
+- village/_types.py: JsonValue-TypeAlias + is_json_value() TypeGuard
+  + load_json_object() mit rekursiver Validierung inkl. NaN/Infinity.
+- _load(p) → dict[str, Any]: verwendet load_json_object() intern zur
+  Laufzeitvalidierung, dann dict()-Copy für kompatiblen Rückgabetyp.
+  Die Boundary ist runtime-validiert, aber statisch auf dict[str, Any]
+  verbreitert — bewusste Übergangslösung. Kein cast().
+- _save(p, data: dict[str, Any]) → None. Kein Any-Parameter mehr.
+- _api/_gh/_mb → Any: bewusst untypisierte externe HTTP-Grenze.
+  Call-Sites mit Objektannahme verwenden isinstance(resp, dict)-Guards.
+- Ein durchgängiges JsonValue-Modell ist NICHT Bestandteil von
+  Foundation 01 — bleibt konkrete technische Schuld.
+
+**Behobene Fehler:**
+- 7 reale mypy-Fehler (datetime-None, no-any-return, arg-type).
+- ~50 Bare-Generic-Stellen korrekt parametrisiert.
+- 6 untypisierte Produktionsfunktionen annotiert.
+- str(submission_id) → isinstance(raw, str)-Guard.
+- # type: ignore[assignment] entfernt (claim_result/complete_result).
+- Alle 9 cast()-Aufrufe entfernt: ersetzt durch load_json_object(),
+  isinstance-Guards, und ValueError-Raises an Persistenzgrenzen.
+- 5 assert isinstance() durch ValueError/None-Return ersetzt
+  (assert ist mit python -O deaktivierbar — kein Boundary-Schutz).
+
+**CI:** requirements-dev.txt → ruff check → ruff format --check . →
+mypy village scripts → pytest (Job-Name pytest unverändert).
+
+**Tests:** 327/327 (25 neu in test_type_safety.py).
+
+**Bewusst offen:** disallow_any_explicit, volles strict = true,
+durchgängiges JsonValue-Modell.
+
+**Dokumentation:** docs/research/TYPE_SAFETY_FOUNDATION_01.md.

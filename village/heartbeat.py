@@ -14,14 +14,16 @@ import time
 import urllib.request
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
+from village._types import load_json_object
 from village.contracts import Budget, ContractState, SuccessCriterion, VillageContract
 from village.village_core import (
-    CanonicalIngressEvent,
     STATUS_ACCEPTED,
     STATUS_MATERIALIZED,
     STATUS_RECEIVED,
     STATUS_REJECTED,
+    CanonicalIngressEvent,
     classify_command,
     find_agent_by_actor_id,
     github_issue_to_event,
@@ -111,11 +113,13 @@ def _retry_suffix(attempts: int) -> str:
 
 
 # ── API helpers ─────────────────────────────────────────
-def _load(p: Path) -> dict:
-    return json.loads(p.read_text()) if p.exists() else {}
+def _load(p: Path) -> dict[str, Any]:
+    if not p.exists():
+        return {}
+    return dict(load_json_object(p.read_text()))
 
 
-def _save(p: Path, d):
+def _save(p: Path, data: dict[str, Any]) -> None:
     """Write-to-temp-then-atomic-replace (docs/research/
     BOUNTY_REVIEW_GATE_01.md Blocker 3): protects each individual file
     against a process crash mid-write leaving behind truncated/corrupt
@@ -127,11 +131,11 @@ def _save(p: Path, d):
     """
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(f"{p.name}.tmp{os.getpid()}")
-    tmp.write_text(json.dumps(d, indent=2))
+    tmp.write_text(json.dumps(data, indent=2))
     tmp.replace(p)
 
 
-def _api(url, token=None, body=None, method="GET"):
+def _api(url: str, token: str | None = None, body: dict[str, Any] | None = None, method: str = "GET") -> Any:
     if not token:
         return None
     h = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -160,11 +164,11 @@ def _api(url, token=None, body=None, method="GET"):
         return None
 
 
-def _gh(path, method="GET", body=None):
+def _gh(path: str, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
     return _api(f"https://api.github.com/repos/{REPO}/{path}", GH, body, method)
 
 
-def _mb(path, method="GET", body=None):
+def _mb(path: str, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
     return _api(f"https://www.moltbook.com/api/v1/{path}", MB, body, method)
 
 
@@ -204,7 +208,7 @@ def _save_challenge_monitor_state() -> None:
     _save(CHALLENGE_STATE, state)
 
 
-def _post_comment_verified(post_id: str, content: str, parent_id: str | None = None) -> dict:
+def _post_comment_verified(post_id: str, content: str, parent_id: str | None = None) -> dict[str, Any]:
     """Post a Moltbook comment and, if it triggers a verify challenge
     (see docs/BEFUND.md §3), solve it automatically via
     village/moltbook_captcha.py and submit the answer before the comment
@@ -229,7 +233,7 @@ def _post_comment_verified(post_id: str, content: str, parent_id: str | None = N
         print(f"  [mb] challenge monitor halted this cycle, skipping comment: {content[:50]!r}")
         return {"posted": False, "reason": "monitor_halted"}
 
-    body: dict = {"content": content}
+    body: dict[str, Any] = {"content": content}
     if parent_id:
         body["parent_id"] = parent_id
     resp = _mb(f"posts/{post_id}/comments", "POST", body)
@@ -292,12 +296,14 @@ def _post_comment_verified(post_id: str, content: str, parent_id: str | None = N
 def _record_comment_id(comment_id: str, post_id: str, parent_id: str | None) -> None:
     store = _load(REPLY_COMMENT_IDS)
     ids = store.get("comment_ids", [])
-    ids.append({
-        "comment_id": comment_id,
-        "post_id": post_id,
-        "parent_id": parent_id,
-        "recorded_at": time.time(),
-    })
+    ids.append(
+        {
+            "comment_id": comment_id,
+            "post_id": post_id,
+            "parent_id": parent_id,
+            "recorded_at": time.time(),
+        }
+    )
     store["comment_ids"] = ids[-200:]
     _save(REPLY_COMMENT_IDS, store)
 
@@ -337,7 +343,7 @@ _GD = {
 }
 
 
-def derive(name: str) -> dict:
+def derive(name: str) -> dict[str, Any]:
     low = name.lower().lstrip("_")
     el = _EL.get(low[0] if low else "a", "akasha")
     seed = sum(ord(c) for c in name)
@@ -359,7 +365,7 @@ def derive(name: str) -> dict:
 
 
 # ── Pokedex ──────────────────────────────────────────────
-def _load_pokedex() -> dict:
+def _load_pokedex() -> dict[str, Any]:
     """Load pokedex.json, migrating any pre-actor_id entries in place
     (docs/SPEC.md §C.1/§E.3). Migration is idempotent — re-running it on
     an already-migrated file is a no-op (no `changed`, no write)."""
@@ -370,7 +376,7 @@ def _load_pokedex() -> dict:
     return dex
 
 
-def dex_register(name: str, actor_id: str | None = None) -> dict:
+def dex_register(name: str, actor_id: str | None = None) -> dict[str, Any]:
     """Register (or return the existing entry for) an agent, keyed by
     `actor_id` (docs/SPEC.md §C.1) — NOT by display name. Two different
     actor_ids that happen to choose the same display name get two separate
@@ -404,8 +410,9 @@ def dex_register(name: str, actor_id: str | None = None) -> dict:
     return ident
 
 
-def dex_list() -> list[dict]:
-    return _load_pokedex().get("agents", [])
+def dex_list() -> list[dict[str, Any]]:
+    agents_raw = _load_pokedex().get("agents", [])
+    return agents_raw if isinstance(agents_raw, list) else []
 
 
 # ── Bounty Board ─────────────────────────────────────────
@@ -413,8 +420,8 @@ def bounty_create(
     title: str,
     description: str,
     reward: str = "reputation",
-    contract_terms: dict | None = None,
-) -> dict:
+    contract_terms: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """`contract_terms`, if given, is stored verbatim on the bounty and
     parsed by `bounty_claim()` via the existing `_parse_contract_terms()`
     -- no separate creation-time validation, same atomic-rejection-on-
@@ -422,7 +429,7 @@ def bounty_create(
     already had."""
     board = _load(BOUNTIES)
     bounties = board.get("bounties", [])
-    bid = f"b{len(bounties)+1:03d}"
+    bid = f"b{len(bounties) + 1:03d}"
     bounty = {
         "id": bid,
         "title": title,
@@ -443,7 +450,7 @@ def bounty_create(
     return bounty
 
 
-def bounty_list(status: str = "open") -> list[dict]:
+def bounty_list(status: str = "open") -> list[dict[str, Any]]:
     return [b for b in _load(BOUNTIES).get("bounties", []) if b.get("status") == status]
 
 
@@ -465,7 +472,7 @@ def _save_contract(contract: VillageContract) -> None:
     _save(CONTRACTS, store)
 
 
-def _parse_contract_terms(terms: dict) -> tuple[list[str], Budget, "datetime | None", list[SuccessCriterion]]:
+def _parse_contract_terms(terms: dict[str, Any]) -> tuple[list[str], Budget, "datetime | None", list[SuccessCriterion]]:
     """Parse a bounty's optional `contract_terms` field into the existing
     village/contracts.py types -- no second schema, no new validation.
     `Budget`/`SuccessCriterion` validate themselves at construction
@@ -484,7 +491,7 @@ def _parse_contract_terms(terms: dict) -> tuple[list[str], Budget, "datetime | N
     return allowed_resources, budget, deadline, success_criteria
 
 
-def bounty_claim(bid: str, agent: str) -> dict | None:
+def bounty_claim(bid: str, agent: str) -> dict[str, Any] | None:
     board = _load(BOUNTIES)
     for b in board.get("bounties", []):
         if b["id"] == bid and b["status"] == "open":
@@ -529,11 +536,13 @@ def bounty_claim(bid: str, agent: str) -> dict | None:
                 contract.activate()
             _save_contract(contract)
 
+            if not isinstance(b, dict):
+                raise ValueError(f"bounty record is not a dict: {type(b).__name__}")
             return b
     return None
 
 
-def bounty_complete(bid: str) -> dict | None:
+def bounty_complete(bid: str) -> dict[str, Any] | None:
     """LEGACY, deliberately narrowed (docs/research/
     BOUNTY_REVIEW_GATE_01.md): since the submit/review gate
     (village/bounty_review.py) exists, no normal path may move a bounty
@@ -567,8 +576,9 @@ def bounty_complete(bid: str) -> dict | None:
 
 
 # ── Contributions (docs/SPEC.md §C.3/§C.4) ──────────────────────────────
-def _record_contribution(event: CanonicalIngressEvent, kind: str, status: str,
-                          artifact_refs: list | None = None) -> None:
+def _record_contribution(
+    event: CanonicalIngressEvent, kind: str, status: str, artifact_refs: list[str] | None = None
+) -> None:
     """Upsert a Contribution keyed by its deterministic contribution_id
     (dedup_key + kind) — an identical retry of the same event/kind recomputes
     the same id and overwrites in place instead of appending, so identical
@@ -611,11 +621,12 @@ def scan_github() -> int:
             f"issues/{num}/comments",
             "POST",
             {
-                "body": f"🦞 **{name}** registered! {ident['element']}/{ident['zone']}/{ident['guardian']}. Pop: {_load(POKEDEX).get('total',0)}\n\nOpen bounties: {len(bounty_list())}"
+                "body": f"🦞 **{name}** registered! {ident['element']}/{ident['zone']}/{ident['guardian']}. Pop: {_load(POKEDEX).get('total', 0)}\n\nOpen bounties: {len(bounty_list())}"  # noqa: E501 — Moltbook announcement template
             },
         )
-        _record_contribution(event, classify_command(event.content), STATUS_MATERIALIZED,
-                              artifact_refs=[f"pokedex:{event.actor_id}"])
+        _record_contribution(
+            event, classify_command(event.content), STATUS_MATERIALIZED, artifact_refs=[f"pokedex:{event.actor_id}"]
+        )
         proc.add(num)
         c += 1
         print(f"  [gh] {name} #{num}")
@@ -624,7 +635,7 @@ def scan_github() -> int:
 
 
 # ── Moltbook Scanner ─────────────────────────────────────
-def _empty_pending() -> dict:
+def _empty_pending() -> dict[str, Any]:
     return {"registration": {}, "bounty_claim": {}, "bounty_reject": {}, "bounty_done": {}}
 
 
@@ -649,7 +660,7 @@ def _retry_event(cid: str, actor_id: str, display_name: str) -> CanonicalIngress
     )
 
 
-def _fetch_comments_resilient(post_id: str) -> list[dict]:
+def _fetch_comments_resilient(post_id: str) -> list[dict[str, Any]]:
     """Fetch a post's comments tolerating the two listing gaps documented
     in docs/MOLTBOOK_CONTRACT_NOTES.md points 7/8: `sort=new` has been
     observed to (temporarily or, once, durably) not show a just-created
@@ -659,7 +670,7 @@ def _fetch_comments_resilient(post_id: str) -> list[dict]:
     relying on a single sort order. Does not solve point 8's fully-invisible
     case (nothing server-side to fetch in that scenario) but does close the
     much more common "wrong sort order missed it" gap."""
-    seen: dict[str, dict] = {}
+    seen: dict[str, dict[str, Any]] = {}
     for sort in ("new", "old"):
         resp = _mb(f"posts/{post_id}/comments?sort={sort}&limit=50")
         if not resp or not resp.get("success"):
@@ -693,12 +704,14 @@ def scan_moltbook() -> int:
     # still awaiting its first successful confirmation.
     for cid, info in list(pending["registration"].items()):
         name = info["name"]
-        actor_id = info.get("actor_id")  # None for entries pending from before C.1 — falls back to legacy_actor_id(name) in dex_register
+        actor_id = info.get(
+            "actor_id"
+        )  # None for entries pending from before C.1 — falls back to legacy_actor_id(name) in dex_register
         attempts = info.get("attempts", 1)
         ident = dex_register(name, actor_id)  # idempotent; just need element/zone/guardian again
         result = _post_comment_verified(
             REG_POST,
-            f"🦞 **{name}** registered! {ident['element']}/{ident['zone']}/{ident['guardian']}. Pop: {_load(POKEDEX).get('total',0)} | Open bounties: {len(bounty_list())}{_retry_suffix(attempts)}",
+            f"🦞 **{name}** registered! {ident['element']}/{ident['zone']}/{ident['guardian']}. Pop: {_load(POKEDEX).get('total', 0)} | Open bounties: {len(bounty_list())}{_retry_suffix(attempts)}",  # noqa: E501 — retry announcement template
             parent_id=cid,
         )
         if result.get("verified"):
@@ -707,7 +720,9 @@ def scan_moltbook() -> int:
             c += 1
             _record_contribution(
                 _retry_event(cid, actor_id or legacy_actor_id(name), name),
-                "join", STATUS_MATERIALIZED, artifact_refs=[f"pokedex:{actor_id or legacy_actor_id(name)}"],
+                "join",
+                STATUS_MATERIALIZED,
+                artifact_refs=[f"pokedex:{actor_id or legacy_actor_id(name)}"],
             )
             print(f"  [mb] reg {name} confirmed on retry")
         else:
@@ -727,7 +742,9 @@ def scan_moltbook() -> int:
             c += 1
             _record_contribution(
                 _retry_event(cid, legacy_actor_id(info["sender"]), info["sender"]),
-                "bounty_claim", STATUS_MATERIALIZED, artifact_refs=[f"bounty:{info['bid']}"],
+                "bounty_claim",
+                STATUS_MATERIALIZED,
+                artifact_refs=[f"bounty:{info['bid']}"],
             )
             print(f"  [mb] bounty {info['bid']} claim confirmed on retry")
         else:
@@ -746,17 +763,20 @@ def scan_moltbook() -> int:
             del pending["bounty_reject"][cid]
             _record_contribution(
                 _retry_event(cid, legacy_actor_id(cid), "?"),
-                "bounty_claim", STATUS_REJECTED,
+                "bounty_claim",
+                STATUS_REJECTED,
             )
         else:
             pending["bounty_reject"][cid]["attempts"] = attempts + 1
-            print(f"  [mb] bounty {info['bid']} rejection still not verified ({result.get('reason')}), retrying next cycle")
+            print(
+                f"  [mb] bounty {info['bid']} rejection still not verified ({result.get('reason')}), retrying next cycle"  # noqa: E501 — log line, broken form harder to grep
+            )
 
     for cid, info in list(pending["bounty_done"].items()):
         attempts = info.get("attempts", 1)
         result = _post_comment_verified(
             REG_POST,
-            f"✅ Bounty `{info['bid']}` complete: {info['title']} — claimed by {info['claimed_by']}{_retry_suffix(attempts)}",
+            f"✅ Bounty `{info['bid']}` complete: {info['title']} — claimed by {info['claimed_by']}{_retry_suffix(attempts)}",  # noqa: E501 — Moltbook announcement template
             parent_id=cid,
         )
         if result.get("verified"):
@@ -765,7 +785,9 @@ def scan_moltbook() -> int:
             c += 1
             _record_contribution(
                 _retry_event(cid, legacy_actor_id(info["claimed_by"]), info["claimed_by"]),
-                "bounty_claim", STATUS_MATERIALIZED, artifact_refs=[f"bounty:{info['bid']}:done"],
+                "bounty_claim",
+                STATUS_MATERIALIZED,
+                artifact_refs=[f"bounty:{info['bid']}:done"],
             )
             print(f"  [mb] bounty {info['bid']} done confirmed on retry")
         else:
@@ -778,7 +800,12 @@ def scan_moltbook() -> int:
         _save(PENDING_MB, pending)
         return c
 
-    already_pending = set(pending["registration"]) | set(pending["bounty_claim"]) | set(pending["bounty_reject"]) | set(pending["bounty_done"])
+    already_pending = (
+        set(pending["registration"])
+        | set(pending["bounty_claim"])
+        | set(pending["bounty_reject"])
+        | set(pending["bounty_done"])
+    )
 
     for cmt in comments:
         cid = cmt.get("id", "")
@@ -815,19 +842,20 @@ def scan_moltbook() -> int:
                 continue
             result = _post_comment_verified(
                 REG_POST,
-                f"🦞 **{name}** registered! {ident['element']}/{ident['zone']}/{ident['guardian']}. Pop: {_load(POKEDEX).get('total',0)} | Open bounties: {len(bounty_list())}",
+                f"🦞 **{name}** registered! {ident['element']}/{ident['zone']}/{ident['guardian']}. Pop: {_load(POKEDEX).get('total', 0)} | Open bounties: {len(bounty_list())}",  # noqa: E501 — Moltbook announcement template
                 parent_id=cid,
             )
             if result.get("verified"):
                 proc.add(cid)
                 c += 1
-                _record_contribution(event, "join", STATUS_MATERIALIZED,
-                                      artifact_refs=[f"pokedex:{event.actor_id}"])
+                _record_contribution(event, "join", STATUS_MATERIALIZED, artifact_refs=[f"pokedex:{event.actor_id}"])
                 print(f"  [mb] reg {name} via {sender}")
             else:
                 pending["registration"][cid] = {"name": name, "actor_id": event.actor_id, "attempts": 1}
                 _record_contribution(event, "join", STATUS_RECEIVED)
-                print(f"  [mb] reg {name} via {sender} — reply not verified ({result.get('reason')}), retrying next cycle")
+                print(
+                    f"  [mb] reg {name} via {sender} — reply not verified ({result.get('reason')}), retrying next cycle"
+                )
             continue
 
         # --- Bounty claim ---
@@ -840,14 +868,16 @@ def scan_moltbook() -> int:
                 # `proc` on purpose, not marked done, so this comment is
                 # retried automatically once the flag is turned on later —
                 # no need for the agent to comment again.
-                print(f"  [mb] bounty claim disabled pending approval — skipping (retries once VILLAGE_BOUNTIES_ENABLED=1): {cid}")
+                print(
+                    f"  [mb] bounty claim disabled pending approval — skipping (retries once VILLAGE_BOUNTIES_ENABLED=1): {cid}"  # noqa: E501 — log line, broken form harder to grep
+                )
                 continue
             bid = m.group(1)
-            result = bounty_claim(bid, sender)
-            if result:
+            claim_result = bounty_claim(bid, sender)
+            if claim_result:
                 reply = _post_comment_verified(
                     REG_POST,
-                    f"🦞 **{sender}** claimed bounty `{bid}`: {result['title']}",
+                    f"🦞 **{sender}** claimed bounty `{bid}`: {claim_result['title']}",
                     parent_id=cid,
                 )
                 if reply.get("verified"):
@@ -856,7 +886,12 @@ def scan_moltbook() -> int:
                     _record_contribution(event, "bounty_claim", STATUS_MATERIALIZED, artifact_refs=[f"bounty:{bid}"])
                     print(f"  [mb] bounty {bid} claimed by {sender}")
                 else:
-                    pending["bounty_claim"][cid] = {"bid": bid, "sender": sender, "title": result["title"], "attempts": 1}
+                    pending["bounty_claim"][cid] = {
+                        "bid": bid,
+                        "sender": sender,
+                        "title": claim_result["title"],
+                        "attempts": 1,
+                    }
                     _record_contribution(event, "bounty_claim", STATUS_RECEIVED)
                     print(f"  [mb] bounty {bid} claim reply not verified ({reply.get('reason')}), retrying next cycle")
             else:
@@ -870,30 +905,41 @@ def scan_moltbook() -> int:
                     _record_contribution(event, "bounty_claim", STATUS_REJECTED)
                 else:
                     pending["bounty_reject"][cid] = {"bid": bid, "attempts": 1}
-                    print(f"  [mb] bounty {bid} rejection reply not verified ({reply.get('reason')}), retrying next cycle")
+                    print(
+                        f"  [mb] bounty {bid} rejection reply not verified ({reply.get('reason')}), retrying next cycle"
+                    )
             continue
 
         # --- Bounty done ---
         m = re.search(r"\bdone\s+(b\d+)", text, re.I)
         if m:
             if os.environ.get("VILLAGE_BOUNTIES_ENABLED") != "1":
-                print(f"  [mb] bounty done disabled pending approval — skipping (retries once VILLAGE_BOUNTIES_ENABLED=1): {cid}")
+                print(
+                    f"  [mb] bounty done disabled pending approval — skipping (retries once VILLAGE_BOUNTIES_ENABLED=1): {cid}"  # noqa: E501 — log line, broken form harder to grep
+                )
                 continue
             bid = m.group(1)
-            result = bounty_complete(bid)
-            if result:
+            complete_result = bounty_complete(bid)
+            if complete_result:
                 reply = _post_comment_verified(
                     REG_POST,
-                    f"✅ Bounty `{bid}` complete: {result['title']} — claimed by {result['claimed_by']}",
+                    f"✅ Bounty `{bid}` complete: {complete_result['title']} — claimed by {complete_result['claimed_by']}",
                     parent_id=cid,
                 )
                 if reply.get("verified"):
                     proc.add(cid)
                     c += 1
-                    _record_contribution(event, "bounty_claim", STATUS_MATERIALIZED, artifact_refs=[f"bounty:{bid}:done"])
+                    _record_contribution(
+                        event, "bounty_claim", STATUS_MATERIALIZED, artifact_refs=[f"bounty:{bid}:done"]
+                    )
                     print(f"  [mb] bounty {bid} done by {sender}")
                 else:
-                    pending["bounty_done"][cid] = {"bid": bid, "title": result["title"], "claimed_by": result["claimed_by"], "attempts": 1}
+                    pending["bounty_done"][cid] = {
+                        "bid": bid,
+                        "title": complete_result["title"],
+                        "claimed_by": complete_result["claimed_by"],
+                        "attempts": 1,
+                    }
                     print(f"  [mb] bounty {bid} done reply not verified ({reply.get('reason')}), retrying next cycle")
             else:
                 # bounty_complete() found nothing to complete — no reply
@@ -946,7 +992,8 @@ def scan_brain() -> int:
             continue
 
         try:
-            from village.brain import is_actionable, create_issue
+            from village.brain import create_issue, is_actionable
+
             actionable, kind = is_actionable(text)
             if actionable:
                 title = text.split("\n")[0].strip()[:80]
@@ -974,7 +1021,9 @@ def scan_brain() -> int:
                     c += 1
                     print(f"  [brain] Issue #{issue.get('number')}: {title}")
                     if not reply.get("verified"):
-                        print(f"  [brain] notification reply not verified ({reply.get('reason')}) — not retried, issue already created")
+                        print(
+                            f"  [brain] notification reply not verified ({reply.get('reason')}) — not retried, issue already created"  # noqa: E501 — log line, broken form harder to grep
+                        )
         except ImportError:
             pass
 
@@ -982,7 +1031,7 @@ def scan_brain() -> int:
 
 
 # ── State ────────────────────────────────────────────────
-def update_state():
+def update_state() -> None:
     dex = _load(POKEDEX)
     s = {
         "village": VILLAGE,
@@ -997,7 +1046,7 @@ def update_state():
 
 
 # ── Main ─────────────────────────────────────────────────
-def heartbeat():
+def heartbeat() -> int:
     print(f"=== Village Heartbeat === {time.strftime('%Y-%m-%d %H:%M:%S')}")
     _load_challenge_monitor_state()
     gh = scan_github()
@@ -1011,6 +1060,7 @@ def heartbeat():
     if os.environ.get("VILLAGE_NADI_ENABLED") == "1":
         try:
             from village.nadi_bridge import nadi_heartbeat
+
             nadi = nadi_heartbeat(VILLAGE)
         except ImportError:
             print("  [nadi] cryptography not installed — skipping")

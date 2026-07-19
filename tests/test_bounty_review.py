@@ -13,7 +13,7 @@ import pytest
 
 import village.bounty_review as br
 import village.heartbeat as hb
-from village.contracts import ContractState, SuccessCriterion
+from village.contracts import ContractState
 from village.work_result import WorkResult, WorkResultStatus
 
 
@@ -21,20 +21,25 @@ def _setup(monkeypatch, tmp_path):
     monkeypatch.setattr(hb, "BOUNTIES", tmp_path / "bounties.json")
     monkeypatch.setattr(hb, "CONTRACTS", tmp_path / "contracts.json")
     monkeypatch.setattr(br, "SUBMISSIONS", tmp_path / "bounty_submissions.json")
-    hb._save(hb.BOUNTIES, {
-        "bounties": [{
-            "id": "b001",
-            "title": "Review village/heartbeat.py",
-            "description": "Read and review the heartbeat scanner.",
-            "reward": "reputation",
-            "status": "open",
-            "created_by": "agent-village",
-            "created_at": 0.0,
-            "claimed_by": None,
-            "claimed_at": None,
-            "completed_at": None,
-        }]
-    })
+    hb._save(
+        hb.BOUNTIES,
+        {
+            "bounties": [
+                {
+                    "id": "b001",
+                    "title": "Review village/heartbeat.py",
+                    "description": "Read and review the heartbeat scanner.",
+                    "reward": "reputation",
+                    "status": "open",
+                    "created_by": "agent-village",
+                    "created_at": 0.0,
+                    "claimed_by": None,
+                    "claimed_at": None,
+                    "completed_at": None,
+                }
+            ]
+        },
+    )
 
 
 def _claim(actor_id="SomeAgent"):
@@ -89,8 +94,15 @@ def test_submission_persists_required_fields(monkeypatch, tmp_path):
     result = br.bounty_submit("b001", "SomeAgent", wr)
 
     for field in (
-        "work_result_id", "contract_id", "execution_id", "actor_id",
-        "provider", "model", "status", "evidence", "submitted_at",
+        "work_result_id",
+        "contract_id",
+        "execution_id",
+        "actor_id",
+        "provider",
+        "model",
+        "status",
+        "evidence",
+        "submitted_at",
     ):
         assert field in result, f"missing field: {field}"
     assert result["work_result_id"] == wr.work_result_id
@@ -491,10 +503,19 @@ def test_insert_submission_refuses_to_overwrite_an_existing_id(monkeypatch, tmp_
     generation: _insert_submission() itself refuses a duplicate key."""
     _setup(monkeypatch, tmp_path)
     submission = {
-        "submission_id": "submission:b001:exec-1", "bounty_id": "b001",
-        "work_result_id": "w", "contract_id": "c", "execution_id": "exec-1",
-        "actor_id": "a", "provider": "p", "model": "m", "status": "succeeded",
-        "output": {}, "evidence": {}, "submitted_at": 0.0, "review": None,
+        "submission_id": "submission:b001:exec-1",
+        "bounty_id": "b001",
+        "work_result_id": "w",
+        "contract_id": "c",
+        "execution_id": "exec-1",
+        "actor_id": "a",
+        "provider": "p",
+        "model": "m",
+        "status": "succeeded",
+        "output": {},
+        "evidence": {},
+        "submitted_at": 0.0,
+        "review": None,
     }
     br._insert_submission(submission)
 

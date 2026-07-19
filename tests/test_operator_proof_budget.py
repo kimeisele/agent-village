@@ -23,7 +23,6 @@ import village.bounty_review as br
 import village.execution_orchestrator as eo
 import village.heartbeat as hb
 from village.cognitive_provider import CognitiveProvider, CognitiveResponse, ProviderUsage
-from village.contracts import Budget
 from village.work_result import WorkResultStatus
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "operator_execute.py"
@@ -65,8 +64,11 @@ def _setup(monkeypatch, tmp_path):
 
 def _usage(prompt_tokens, completion_tokens, cost_usd, duration) -> ProviderUsage:
     return ProviderUsage(
-        prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
-        total_tokens=prompt_tokens + completion_tokens, cost_usd=cost_usd, duration_seconds=duration,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        cost_usd=cost_usd,
+        duration_seconds=duration,
     )
 
 
@@ -118,15 +120,22 @@ def test_operator_execution_books_usage_against_the_proof_contract(monkeypatch, 
     )
     hb.bounty_claim(created["id"], "operator-proof-01")
     from village.interpreter import RESULT_BEGIN, RESULT_END
+
     marked = f'{RESULT_BEGIN}\n{{"gaps": []}}\n{RESULT_END}'
     response = CognitiveResponse(
-        visible_text=marked, reasoning_text=None, finish_reason="stop",
-        usage=_usage(100, 50, 0.001, 0.5), provider="fake", model="fake-model-01",
+        visible_text=marked,
+        reasoning_text=None,
+        finish_reason="stop",
+        usage=_usage(100, 50, 0.001, 0.5),
+        provider="fake",
+        model="fake-model-01",
     )
     provider = FakeProvider(script=[response])
     request = eo.ExecutionRequest(
-        bounty_id=created["id"], actor_id="operator-proof-01",
-        target_file="village/heartbeat.py", instruction="Find gaps.",
+        bounty_id=created["id"],
+        actor_id="operator-proof-01",
+        target_file="village/heartbeat.py",
+        instruction="Find gaps.",
     )
 
     outcome = eo.run_operator_execution(request, provider, "file content")
@@ -151,14 +160,19 @@ def test_exceeding_the_proof_budget_is_controlled_by_existing_logic(monkeypatch,
     )
     hb.bounty_claim(created["id"], "operator-proof-01")
     huge = CognitiveResponse(
-        visible_text="not usable, no markers", reasoning_text=None, finish_reason="stop",
+        visible_text="not usable, no markers",
+        reasoning_text=None,
+        finish_reason="stop",
         usage=_usage(30_000, 20_000, 0.001, 0.5),  # 50,000 tokens > 40,000 limit
-        provider="fake", model="fake-model-01",
+        provider="fake",
+        model="fake-model-01",
     )
     provider = FakeProvider(script=[huge])
     request = eo.ExecutionRequest(
-        bounty_id=created["id"], actor_id="operator-proof-01",
-        target_file="village/heartbeat.py", instruction="Find gaps.",
+        bounty_id=created["id"],
+        actor_id="operator-proof-01",
+        target_file="village/heartbeat.py",
+        instruction="Find gaps.",
     )
 
     outcome = eo.run_operator_execution(request, provider, "file content")

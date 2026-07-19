@@ -108,14 +108,24 @@ def test_dex_register_migrates_real_pre_actor_id_pokedex_on_load(monkeypatch, tm
     readable and gets migrated the moment any dex_* function touches it —
     no manual migration step required, no data lost."""
     _setup(monkeypatch, tmp_path)
-    hb._save(hb.POKEDEX, {
-        "agents": [{
-            "name": "B_ClawAssistant", "status": "observed", "element": "prithvi",
-            "zone": "engineering", "guardian": "prahlada", "guna": "SATTVA",
-            "seed": 1506, "registered_at": 1784406096.094726,
-        }],
-        "total": 1,
-    })
+    hb._save(
+        hb.POKEDEX,
+        {
+            "agents": [
+                {
+                    "name": "B_ClawAssistant",
+                    "status": "observed",
+                    "element": "prithvi",
+                    "zone": "engineering",
+                    "guardian": "prahlada",
+                    "guna": "SATTVA",
+                    "seed": 1506,
+                    "registered_at": 1784406096.094726,
+                }
+            ],
+            "total": 1,
+        },
+    )
 
     agents = hb.dex_list()
     assert len(agents) == 1

@@ -40,13 +40,18 @@ def test_first_run_fails_verify_second_run_retries_not_skips(monkeypatch, tmp_pa
 
     # --- Run 1: registration succeeds, confirmation reply fails verification ---
     monkeypatch.setattr(
-        hb, "_mb",
-        lambda path, method="GET", body=None: _comments_response(join_comment) if "comments" in path and method == "GET" else {"success": True},
+        hb,
+        "_mb",
+        lambda path, method="GET", body=None: _comments_response(join_comment)
+        if "comments" in path and method == "GET"
+        else {"success": True},
     )
     verify_attempts_run1 = []
     monkeypatch.setattr(
-        hb, "_post_comment_verified",
-        lambda *a, **k: verify_attempts_run1.append(a) or {"posted": True, "verified": False, "reason": "verify_rejected"},
+        hb,
+        "_post_comment_verified",
+        lambda *a, **k: verify_attempts_run1.append(a)
+        or {"posted": True, "verified": False, "reason": "verify_rejected"},
     )
 
     result1 = hb.scan_moltbook()
@@ -77,13 +82,18 @@ def test_first_run_fails_verify_second_run_retries_not_skips(monkeypatch, tmp_pa
     # Same comment still returned by the API (as it would be in reality --
     # Moltbook doesn't stop returning old comments).
     monkeypatch.setattr(
-        hb, "_mb",
-        lambda path, method="GET", body=None: _comments_response(join_comment) if "comments" in path and method == "GET" else {"success": True},
+        hb,
+        "_mb",
+        lambda path, method="GET", body=None: _comments_response(join_comment)
+        if "comments" in path and method == "GET"
+        else {"success": True},
     )
 
     result2 = hb.scan_moltbook()
 
-    assert len(verify_attempts_run2) == 1, "confirmation retry must be attempted on run 2, not skipped because dex_register() says _dup"
+    assert (
+        len(verify_attempts_run2) == 1
+    ), "confirmation retry must be attempted on run 2, not skipped because dex_register() says _dup"
     assert result2 == 1  # now counted as a successful confirmation
 
     proc2 = hb._load(hb.PROC_MB).get("comment_ids", [])
@@ -102,12 +112,15 @@ def test_pending_bounty_claim_retries_with_stored_data_not_bounty_claim_again(mo
     retry. The retry pass must use the info captured at first-attempt
     time, never calling bounty_claim() again."""
     _setup(monkeypatch, tmp_path)
-    hb._save(hb.PENDING_MB, {
-        "registration": {},
-        "bounty_claim": {"c2": {"bid": "b001", "sender": "SomeAgent", "title": "Test bounty"}},
-        "bounty_reject": {},
-        "bounty_done": {},
-    })
+    hb._save(
+        hb.PENDING_MB,
+        {
+            "registration": {},
+            "bounty_claim": {"c2": {"bid": "b001", "sender": "SomeAgent", "title": "Test bounty"}},
+            "bounty_reject": {},
+            "bounty_done": {},
+        },
+    )
 
     bounty_claim_calls = []
     monkeypatch.setattr(hb, "bounty_claim", lambda *a, **k: bounty_claim_calls.append(a) or None)

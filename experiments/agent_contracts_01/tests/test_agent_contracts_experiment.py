@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import pytest
 from agent_contracts import ContractState
-
 from contract_experiment import (
     build_b001_contract,
     evaluate_success,
