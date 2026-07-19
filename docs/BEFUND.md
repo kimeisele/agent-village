@@ -1638,3 +1638,61 @@ NADI-kompatibel formatiert, aber nicht verdrahtet).
 
 `nightforge`/`agentis-colonies` bleiben wie angeordnet zurückgestellt,
 dieser Zyklus zuerst.
+
+---
+
+## §28 — `village/contracts.py` erstmals produktiv verwendet (2026-07-19)
+
+Follow-up zu §27. Integrationspunkt von Kim vorgegeben, nicht neu
+evaluiert: `bounty_claim()`/`bounty_complete()` in
+`village/heartbeat.py` — die einzigen produktiv erreichbaren
+Bounty-Funktionen (`bounty_create()` wird nirgends aufgerufen).
+`scan_moltbook()`/`scan_github()`'s Kommentar-/Issue-Parsing unverändert.
+
+**Änderung, minimal:**
+- `bounty_claim(bid, agent)` erzeugt bei Erfolg ODER lädt eine
+  bestehende `VillageContract` (`contract_id = f"contract:{bid}:1"`,
+  deterministisch), `title`/`description` direkt aus dem Bounty-Dict,
+  `activate()` falls noch `DRAFTED`, persistiert in neuer
+  `data/village/contracts.json` (gleiches `{"contracts": {id: ...}}`-
+  Muster wie `CONTRIBUTIONS`). Budget/Deadline bleiben `None`.
+- `bounty_complete(bid)` lädt den passenden Contract, ruft `fulfill()`
+  auf (trivial erfüllt, keine `success_criteria` gesetzt — spiegelt
+  exakt die heutige Semantik "jemand sagt fertig", keine neue Prüfung).
+  Fehlender Contract (Altbestand vor dieser Änderung): sauber
+  übersprungen mit Logzeile, kein Crash.
+- Fehlschlag von `bounty_claim`/`bounty_complete` (falsche `bid`/falscher
+  Status): `contracts.json` bleibt unberührt, unverändertes Verhalten.
+
+**Diff-Größe:** `village/heartbeat.py` +54/-0 Zeilen (rein additiv: 2
+neue Konstanten/Imports, 2 kleine Hilfsfunktionen, ~15 Zeilen in den
+beiden bestehenden Funktionen). Kein anderes Produktivfile geändert.
+
+**Tests:** 6 neue (`tests/test_bounty_contracts.py`), lokal ausgeführt:
+
+```
+$ python3 -m pytest tests/test_bounty_contracts.py -v
+...
+6 passed in 0.64s
+```
+
+Gesamte Suite: `python3 -m pytest tests/ -q` → **147 passed** (141
+bestehend + 6 neu), keine Regression. `git status --short data/` nach
+dem Lauf leer — keine echten Repo-Daten berührt.
+
+**Welche Fähigkeit dadurch erstmals real wird (nicht nur getestet):**
+jeder produktive Bounty-Claim/-Complete hinterlässt ab jetzt einen
+Governance-Datensatz — einen `VillageContract` mit echtem Zustandswechsel
+(`drafted → active → fulfilled`) neben dem bestehenden
+`bounties.json`-Eintrag. Noch keine Budget-/Deadline-Durchsetzung (keine
+Datenquelle dafür), aber die Zustandsmaschine selbst läuft jetzt live,
+nicht mehr nur isoliert in Tests.
+
+**Logisch folgende Schritte** (nicht begonnen): Review-Zustand vor
+`fulfill()` (siehe `docs/research/NIGHTFORGE_DESIGN_NOTE_01.md`,
+`verifying`/`accepted`/`rejected`), Reputation-Tier-Übergang bei
+Erfüllung (siehe `docs/research/AGENTIS_COLONIES_DESIGN_NOTE_01.md`,
+`OBSERVED → CLAIMED`), und — Voraussetzung für beides — eine echte
+Datenquelle für Budget/Deadline/Erfolgskriterien. Details:
+`docs/research/VILLAGE_CONTRACTS_01.md`, Abschnitt "First production
+wiring".
