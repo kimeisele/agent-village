@@ -206,8 +206,8 @@ $ python3 -m pytest tests/ -q
 2 new in `tests/test_worker_no_write_authority.py` (the other 2 new
 authority tests offset by consolidating; see file diff for the exact
 +/-). No regressions, no real API call anywhere, `git status --short
-data/` clean after the local run. CI link to be added once the PR is
-opened and the workflow runs.
+data/` clean after the local run. CI: [run 29691868757](https://github.com/kimeisele/agent-village/actions/runs/29691868757),
+green.
 
 ## 9) Village capability that first exists because of this
 
