@@ -1,0 +1,71 @@
+# SECURITY-CRITICAL. Same posture as worker-proof-01.yml:
+# workflow_dispatch only -- no push, no pull_request/pull_request_target,
+# no schedule, no trigger reachable by external content (issue text,
+# comment text, fork PRs). permissions: contents: read -- this workflow
+# can NEVER commit/push/PR/merge anything, regardless of what
+# scripts/operator_execute.py does or doesn't do locally. That script
+# DOES read/write real data/village/*.json files in the runner's own
+# ephemeral checkout (unlike worker-proof-01.yml's in-memory-only proof
+# contract) -- safe by construction because this permission block makes
+# it structurally impossible for any of that to be committed/pushed
+# back, not merely a convention. See docs/research/
+# OPERATOR_EXECUTION_01.md.
+name: Operator Execute 01 (DeepSeek, manual only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      bounty_id:
+        description: "Existing claimed bounty id to use (leave blank to auto-create+claim a dedicated, clearly-labeled proof bounty)"
+        required: false
+        default: ""
+      actor_id:
+        description: "Actor id (must match the bounty's claimed_by if bounty_id is set)"
+        required: false
+        default: "operator-proof-01"
+      target_file:
+        description: "Local file to analyze (repo-relative path)"
+        required: false
+        default: "village/heartbeat.py"
+      model:
+        description: "DeepSeek model id"
+        required: false
+        default: "deepseek-v4-flash"
+
+permissions:
+  contents: read
+
+jobs:
+  operator-execute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run operator execution (claimed bounty -> submitted)
+        env:
+          # Absent unless a maintainer has explicitly added this repo
+          # secret -- if unset, scripts/operator_execute.py exits 1 with
+          # a clean "not set" message and writes a non-secret
+          # SKIPPED_NO_SECRET evidence file, never a fake success.
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_MODEL: ${{ inputs.model }}
+          OPERATOR_BOUNTY_ID: ${{ inputs.bounty_id }}
+          OPERATOR_ACTOR_ID: ${{ inputs.actor_id }}
+          OPERATOR_TARGET_FILE: ${{ inputs.target_file }}
+          OPERATOR_EVIDENCE_PATH: operator_execute_evidence.json
+        run: python3 scripts/operator_execute.py
+
+      - name: Upload evidence artifact (non-secret)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operator-execute-01-evidence
+          path: operator_execute_evidence.json
+          retention-days: 7
+          if-no-files-found: warn
