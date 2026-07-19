@@ -1166,3 +1166,49 @@ Erster echter Lauf durch den eigenen Push ausgelöst und beobachtet:
 [Run 29674990442](https://github.com/kimeisele/agent-village/actions/runs/29674990442),
 grün, **87/87 bestanden** — jetzt unabhängig im Actions-Log nachprüfbar,
 nicht mehr nur lokal behauptet.
+
+---
+
+## §21 — Name-Sanitizing + Reply-Nesting-Frage geklärt (2026-07-19)
+
+### Task 1: Name-Sanitizing
+
+Neuer Helper `_sanitize_name(raw, fallback)` in `village/heartbeat.py`:
+entfernt Unicode-Kategorien `Cc`/`Cf` (Steuer-/Formatzeichen — `\x00`,
+Tabs, Newlines etc.), truncatet auf 40 Zeichen, fällt bei leerem Ergebnis
+auf den Absender/Issue-Autor zurück. Bewusst **keine** ASCII-Filterung —
+"Jörg"/"北京" bleiben unverändert (eigens getestet). Angewendet identisch
+auf beide Registrierungspfade (`scan_moltbook()` Moltbook-Kommentare,
+`scan_github()` GitHub-Issues).
+
+8 neue Tests, sowohl gegen `_sanitize_name()` direkt als auch
+End-to-End durch `scan_moltbook()` (prüft den tatsächlichen
+`pokedex.json`-Eintrag). Dabei einen eigenen Test-Bug gefunden und
+korrigiert (fehlender `_setup()`-Aufruf ließ einen Test kurzzeitig das
+echte Repo-`pokedex.json` statt einer isolierten `tmp_path` lesen) —
+verifiziert, dass dabei keine echten Daten verändert wurden (der Scan kehrte
+vor jedem Schreibzugriff früh zurück).
+
+**95/95 Tests grün, per echtem CI-Lauf bestätigt:**
+[Run 29675327019](https://github.com/kimeisele/agent-village/actions/runs/29675327019).
+
+### Task 2: Reply-Nesting live verifiziert
+
+Reines Lese-Skript (kein POST/PATCH/DELETE), einmalig als Python-Snippet
+ausgeführt, nicht als Datei im Repo abgelegt — dafür zu simpel/ad-hoc, um
+als wiederverwendbares Tool zu taugen (nur eine rekursive Tiefensuche über
+eine bereits vorhandene API-Antwort).
+
+Alle 5 bekannten eigenen `reply_comment_id`s aus §19 gegen den echten,
+rekursiv (alle Tiefen) abgefragten Kommentar-Baum des Registrierungsposts
+geprüft: **keine erscheint als Top-Level-Eintrag, alle 5 konstant
+verschachtelt.** Damit ist die bisherige Beobachtung aus
+`docs/MOLTBOOK_CONTRACT_NOTES.md` jetzt live bestätigt (nicht mehr nur
+Vermutung) — mit der weiterhin offenen Einschränkung, dass Tiefe 2+
+(Antwort auf unsere eigene Antwort) nie vorkam und nicht erzeugt wurde, um
+sie zu prüfen. Eintrag in `docs/MOLTBOOK_CONTRACT_NOTES.md` entsprechend
+ergänzt (nicht der ganze Abschnitt neu geschrieben, nur die Unbekannte
+aufgelöst).
+
+Kein Schreibzugriff über bereits bestehendes Reply-Verhalten hinaus, kein
+Cron, keine neuen Flags.

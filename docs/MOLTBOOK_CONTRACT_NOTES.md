@@ -98,7 +98,15 @@ Auflistung erschien. → BEFUND §18.
   Top-Level-Liste — nicht rekursiv über verschachtelte `replies`. Unsere
   eigenen Antworten erscheinen bisher immer als `replies` (weil wir immer
   mit `parent_id` antworten), nie als eigene Top-Level-Einträge, würden
-  also strukturell nie in die Keyword-Prüfung gelangen. **Das ist eine
-  Beobachtung aus den bisherigen Tests, keine verifizierte Garantie** —
-  nicht systematisch gegen z. B. verschachtelte Antworten auf unsere
-  eigenen Antworten (Tiefe 2+) getestet.
+  also strukturell nie in die Keyword-Prüfung gelangen.
+
+  **Live geprüft (2026-07-19, read-only, docs/BEFUND.md §21):** alle 5
+  bekannten eigenen `reply_comment_id`s aus §19 (`81ab8ac9-...`,
+  `cf0e037a-...`, `17be4b04-...`, `e1c9b824-...`, `bd1a5848-...`) wurden
+  über eine rekursive, alle Tiefen erfassende Abfrage des echten
+  Registrierungspost-Threads gesucht. **Ergebnis: keine einzige erscheint
+  als Top-Level-Eintrag — alle 5 konstant verschachtelt.** Bestätigt für
+  den bisher beobachteten Zustand (4 Top-Level-Kommentare, 6 verschachtelte
+  Antworten, Verschachtelungstiefe bis 1). **Weiterhin keine Garantie für
+  Tiefe 2+** (Antwort auf unsere eigene Antwort) — dieser Fall kam in den
+  bisherigen Tests nie vor und wurde nicht erzeugt, um ihn zu prüfen.
