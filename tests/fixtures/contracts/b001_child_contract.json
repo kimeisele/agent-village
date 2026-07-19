@@ -1,0 +1,25 @@
+{
+  "allowed_resources": [],
+  "budget": {
+    "cognitive_units": null,
+    "cost_usd": 0.1,
+    "time_seconds": null,
+    "tokens": 5000,
+    "used_cognitive_units": 0.0,
+    "used_cost_usd": 0.0,
+    "used_time_seconds": 0.0,
+    "used_tokens": 0.0
+  },
+  "contract_id": "contract:b001:1:sub-a",
+  "contribution_id": null,
+  "created_at": "2026-07-19T09:42:32.296759+00:00",
+  "deadline": null,
+  "description": "",
+  "parent_contract_id": "contract:b001:1",
+  "schema_version": "1",
+  "state": "drafted",
+  "success_criteria": [],
+  "termination_reason": null,
+  "title": "Sub-review: error handling section",
+  "version": "1.0"
+}

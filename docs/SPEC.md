@@ -436,6 +436,33 @@ Only the states the code currently needs — no speculative lifecycle beyond
 what `join`, `feature:`/`bug:` (when Brain is active), and `claim bXXX`/
 `done bXXX` actually produce today.
 
+### C.3.1 Village Contract (governance layer, `village/contracts.py`)
+
+A `VillageContract` is a distinct concern from a Contribution: not
+ingress bookkeeping, but the governance conditions a bounty/work-order
+runs under — budget (multiple independent dimensions: tokens, cost,
+time, abstract cognitive units; not tied to one LLM provider or metric),
+an optional deadline (always normalized to a timezone-aware UTC
+`datetime` internally — see docs/research/AGENT_CONTRACTS_EXPERIMENT_01.md
+for the real bug this avoids), a typed allowed-resource whitelist,
+data-only checkable success criteria (no stored callable/eval'd string,
+per §A.8), and explicit terminal states (`fulfilled | violated | expired
+| terminated | failed`). May reference a Contribution by
+`contribution_id` for provenance; never duplicates or takes over
+Contribution's own fields or state machine. Stdlib-only, JSON-native
+(`to_dict`/`from_dict`/`to_json`, `sort_keys=True` — same convention as
+NADI message signing, §2.3), schema-tolerant (unknown top-level fields
+preserved, not dropped). `validate_child_budget()`/`new_child_contract()`
+enforce a pure data invariant — a child contract's budget may never
+exceed its parent's remaining budget — with no delegation runtime
+implied or required to exist yet. Adapted conceptually (ADAPT_CONCEPT,
+not adopted as a dependency) from `experiments/agent_contracts_01/`, per
+docs/research/AGENT_CONTRACTS_EXPERIMENT_01.md. Not yet wired into
+`bounty_create()`/`bounty_claim()`/`bounty_complete()` — no current
+ingress path supplies budget/deadline/success-criteria data, so wiring
+now would be speculative; documented as the natural next step once such
+a data source exists, not forced in this slice.
+
 ### C.4 Unify the two existing paths
 
 `scan_moltbook()` and `scan_github()` currently each read raw platform data

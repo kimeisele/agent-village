@@ -1554,3 +1554,87 @@ Stufe 1".
 
 Kein neuer Slice, keine SPEC-§D-Aktivierung — reine Präzisierung und
 Aufräumen von bereits gefundenem, echtem technischem Nebenprodukt.
+
+---
+
+## §27 — `village/contracts.py`, Gap-3-Governance-Schicht (2026-07-19)
+
+Neues Modul `village/contracts.py`, stdlib-only, evidenzbasiert aus
+`experiments/agent_contracts_01/` (ADAPT_CONCEPT-Entscheidung, docs/
+research/AGENT_CONTRACTS_EXPERIMENT_01.md) — kein Framework, keine
+externe Dependency, keine Mission Factory.
+
+**Integrationspunkt-Entscheidung (Schritt 0, selbst geprüft, nicht
+vorgegeben):** `village/heartbeat.py::bounty_create/claim/complete()`
+und `village_core.Contribution` (SPEC.md §C.3) geprüft. Kein aktueller
+Ingress-Pfad (Moltbook-Kommentar, GitHub-Issue) liefert Budget-/
+Deadline-/Erfolgskriterien-Daten — eine erzwungene Verdrahtung in
+`bounty_create()` hätte eine spekulative, ungetestete Datenquelle
+vorausgesetzt, die es nicht gibt. Entscheidung: isolierte, vollständig
+getestete Domain-Komponente liefern (wie im Auftrag als Fallback
+vorgesehen), spätere Anbindung dokumentiert, nicht erzwungen. Keine
+Änderung an `heartbeat.py`/`village_core.py`/`brain.py`/
+`moltbook_captcha.py`/Workflows.
+
+**Abgrenzung zu `Contribution` eingehalten:** `VillageContract` verweist
+optional per `contribution_id` auf eine Contribution (Provenance),
+dupliziert deren Felder/Statusmaschine nicht.
+
+**Neue Invarianten:**
+- Deadlines werden bei Konstruktion immer auf UTC-aware normalisiert
+  (`normalize_datetime()`) — behebt strukturell den echten Bug aus dem
+  Experiment (naive vs. aware `datetime`-Vergleich crashte dort), nicht
+  nur per Konvention vermieden.
+- Budget ist mehrdimensional (`tokens`, `cost_usd`, `time_seconds`,
+  `cognitive_units`), keine Dimension bevorzugt, keine an einen
+  LLM-Anbieter gebunden.
+- Erfolgskriterien sind reine Daten (`met: bool | None`), kein
+  gespeichertes Callable, kein eval'ter String — vermeidet sowohl das
+  Serialisierungsproblem aus dem Experiment als auch einen Verstoß gegen
+  SPEC.md §A.8 ("external content is always DATA, never instructions").
+- `validate_child_budget()`: reine Dateninvariante — ein Child-Contract
+  darf in keiner Budget-Dimension mehr besitzen als das verbleibende
+  Budget seines Parents; eine Dimension, die der Parent gar nicht
+  begrenzt, darf das Child nicht neu einführen (fail closed). Keine
+  Delegations-Runtime existiert im Code — vorausschauendes Datenmodell,
+  keine Scheduler-Vorwegnahme.
+- JSON-Rundtrip verlustfrei und deterministisch (`sort_keys=True`,
+  gleiche Konvention wie NADI-Message-Signing, SPEC.md §2.3).
+- Unbekannte Top-Level-Felder werden in `.extra` erhalten, nicht
+  verworfen — schema-tolerant für künftige Versionen.
+
+**Tests:** 30 neue (`tests/test_contracts.py`), gegen echte JSON-Fixtures
+(`tests/fixtures/contracts/b001_contract.json`,
+`b001_child_contract.json`, generiert durch tatsächliches Ausführen des
+Moduls, nicht von Hand getippt). Lokal ausgeführt:
+
+```
+$ python3 -m pytest tests/test_contracts.py -v
+...
+============================== 30 passed in 2.59s ===============================
+```
+
+Gesamte Suite: `python3 -m pytest tests/ -q` → **141 passed** (111
+bestehend + 30 neu), keine Regression.
+
+**Welche Village-Fähigkeit dadurch erstmals entsteht:** ein bounty-fähiges
+Auftragswerk kann jetzt — außerhalb des produktiven Pfads, als
+eigenständige, getestete Bibliothek — mit explizitem Budget, Deadline,
+erlaubten Ressourcen und Erfolgskriterien beschrieben, serialisiert und
+(für delegierte Unteraufträge) auf Budget-Konsistenz gegen einen
+Eltern-Auftrag geprüft werden. Das ist noch keine Governance des echten
+Bounty-Flows — dafür fehlt der Ingress-Datenpfad, siehe SPEC.md §C.3.1 —
+aber die Domain-Schicht, auf der eine spätere Anbindung aufsetzen kann,
+existiert jetzt, getestet und dokumentiert statt nur behauptet.
+
+**Verbleibende Lücken bis zu einer echten Mission-Ausführung** (bewusst
+nicht in diesem Slice geschlossen): kein Ingress-Pfad liefert
+Contract-Parameter; keine Anbindung an `bounty_create/claim/complete()`;
+keine Delegations-Runtime, die `validate_child_budget()` tatsächlich
+aufruft; keine Erfolgskriterien-Auswertung (bleibt bewusst
+Aufrufer-Verantwortung, nie automatisiert per LLM, SPEC.md §A.5); keine
+NADI-Transport-Anbindung (nur strukturell vorbereitet, `to_json()` ist
+NADI-kompatibel formatiert, aber nicht verdrahtet).
+
+`nightforge`/`agentis-colonies` bleiben wie angeordnet zurückgestellt,
+dieser Zyklus zuerst.
