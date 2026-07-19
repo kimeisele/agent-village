@@ -511,42 +511,35 @@ def bounty_claim(bid: str, agent: str) -> dict | None:
 
 
 def bounty_complete(bid: str) -> dict | None:
+    """LEGACY, deliberately narrowed (docs/research/
+    BOUNTY_REVIEW_GATE_01.md): since the submit/review gate
+    (village/bounty_review.py) exists, no normal path may move a bounty
+    directly from `claimed` to `done` anymore -- that would silently
+    bypass review, which is exactly what this gate exists to prevent.
+    This function now refuses that transition unconditionally (same
+    `None` return as "bid not found" -- no bounty/contract state
+    change), for BOTH callers of this function: any future direct
+    caller, and the existing `scan_moltbook()` "done bXXX" comment path
+    (village/heartbeat.py), which as a side effect of this change no
+    longer completes a bounty from a bare chat comment -- real
+    completion now requires actual submitted work evidence via
+    `village.bounty_review.bounty_submit()` +
+    `village.bounty_review.bounty_review()`. See docs/BEFUND.md §32 for
+    the explicit behavior-change note.
+
+    Real completion path: `village.bounty_review.bounty_submit()` then
+    `village.bounty_review.bounty_review(..., decision="accept")` --
+    only that path may set a bounty to `done` or call
+    `contract.fulfill()`.
+    """
     board = _load(BOUNTIES)
     for b in board.get("bounties", []):
         if b["id"] == bid and b["status"] == "claimed":
-            b["status"] = "done"
-            b["completed_at"] = time.time()
-            _save(BOUNTIES, board)
-
-            # Governance layer (docs/SPEC.md §C.3.1). A missing contract
-            # (e.g. a bounty claimed before this wiring existed) is
-            # skipped cleanly, not a crash -- see docs/BEFUND.md.
-            contract_id = _contract_id_for(bid)
-            contract = _load_contract(contract_id)
-            if contract is None:
-                print(f"  [contracts] no contract for {bid} (pre-existing claim?) — skipping")
-            elif contract.state == ContractState.ACTIVE:
-                unmet_required = [
-                    c.name for c in contract.success_criteria if c.required and c.met is not True
-                ]
-                if unmet_required:
-                    # No success-criteria evaluator exists (SPEC.md §A.5:
-                    # no LLM/automated judgment gets write authority) --
-                    # do NOT call fulfill() (would raise) and do NOT
-                    # pretend the criteria were checked. The bounty
-                    # itself still moves to "done" above, unchanged
-                    # bounty_complete() behavior from PR #11 -- only the
-                    # contract's own state is affected here.
-                    print(
-                        f"  [contracts] {bid} has unverified required success criteria "
-                        f"{unmet_required} — not automatically verifiable, no result payload "
-                        f"to check against. Contract stays ACTIVE, not fulfilled."
-                    )
-                else:
-                    contract.fulfill()
-                    _save_contract(contract)
-
-            return b
+            print(
+                f"  [contracts] bounty_complete({bid}) refused -- direct claimed->done is "
+                "no longer supported. Use bounty_review.bounty_submit()/bounty_review() instead."
+            )
+            return None
     return None
 
 
