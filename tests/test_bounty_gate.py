@@ -59,6 +59,7 @@ def test_claim_comment_proceeds_when_enabled(monkeypatch, tmp_path):
     monkeypatch.setenv("VILLAGE_BOUNTIES_ENABLED", "1")
     monkeypatch.setattr(hb, "CHALLENGE_STATE", tmp_path / "challenge_failures.json")
     monkeypatch.setattr(hb, "PROC_MB", tmp_path / "processed_comments.json")
+    monkeypatch.setattr(hb, "CONTRIBUTIONS", tmp_path / "contributions.json")
     monkeypatch.setattr(hb, "MB", "fake-key")
     monkeypatch.setattr(hb, "REG_POST", "post123")
 

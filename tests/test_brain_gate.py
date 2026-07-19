@@ -40,7 +40,11 @@ def test_enabled_flag_lets_it_proceed_to_fetch_comments(monkeypatch):
 
     result = hb.scan_brain()
     assert result == 0  # no comments to process, but it DID try
-    assert len(calls) == 1
+    # 2 calls, not 1: scan_brain() now fetches via
+    # _fetch_comments_resilient() (docs/SPEC.md §C.5 -- tolerate the
+    # sort=new listing gap documented in MOLTBOOK_CONTRACT_NOTES.md point
+    # 7), which queries both sort=new and sort=old and merges by id.
+    assert len(calls) == 2
 
 
 def test_wrong_value_does_not_enable(monkeypatch):

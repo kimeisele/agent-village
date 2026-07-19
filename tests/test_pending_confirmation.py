@@ -26,6 +26,8 @@ def _setup(monkeypatch, tmp_path):
     monkeypatch.setattr(hb, "PENDING_MB", tmp_path / "pending_confirmations.json")
     monkeypatch.setattr(hb, "POKEDEX", tmp_path / "pokedex.json")
     monkeypatch.setattr(hb, "BOUNTIES", tmp_path / "bounties.json")
+    monkeypatch.setattr(hb, "CONTRIBUTIONS", tmp_path / "contributions.json")
+    monkeypatch.setattr(hb, "REPLY_COMMENT_IDS", tmp_path / "reply_comment_ids.json")
     monkeypatch.setattr(hb, "MB", "fake-key")
     monkeypatch.setattr(hb, "REG_POST", "post123")
     hb._save(hb.BOUNTIES, {"bounties": []})
