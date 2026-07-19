@@ -2217,3 +2217,16 @@ mypy village scripts → pytest (Job-Name pytest unverändert).
 durchgängiges JsonValue-Modell.
 
 **Dokumentation:** docs/research/TYPE_SAFETY_FOUNDATION_01.md.
+
+### §34a — Post-Merge-Korrektur (2026-07-19)
+
+Nach Squash-Merge von PR #19 (main `3e8d11c`) wurde auf frischem
+Working Tree mit ruff 0.14.2 eine Formatabweichung in
+`tests/test_pending_confirmation.py` festgestellt. Ursache:
+Versionsunterschied — ruff 0.14.2 formatiert lange `assert`-Zeilen
+anders als das gepinnte ruff 0.8.1. Mit ruff 0.8.1 besteht die Datei
+den Format-Check. Keine Code-Änderung nötig.
+
+Zusätzlich wurde `cryptography>=41.0` in `requirements-dev.txt` auf
+`cryptography==46.0.6` gepinnt (Version aus lokaler Umgebung, Python
+3.11 kompatibel, CI-grün).
