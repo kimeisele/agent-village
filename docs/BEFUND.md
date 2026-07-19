@@ -1353,3 +1353,66 @@ als erledigt geführt zu werden.
 
 Alle 111 Tests grün (109 vorher + 2 neu für Fund 1), keine Schreibzugriffe
 auf echte Repo-Daten (`git status --short data/` leer nach dem Lauf).
+
+---
+
+## §24 — Erster echter Heartbeat-Lauf nach PR #3 Merge (2026-07-19)
+
+Auf Kims Anweisung manuell ausgelöst gegen `main` (PR #3 gemergt, `main` bei
+`7e67493`): `gh workflow run village-heartbeat.yml --ref main`.
+
+**Run:** [29677158426](https://github.com/kimeisele/agent-village/actions/runs/29677158426),
+`workflow_dispatch`, Status `success`, ~5s Laufzeit. Vollständiges Log via
+`gh run view 29677158426 --log` geprüft — kein Traceback, kein Python-
+Fehler in `scan_moltbook()`/`scan_github()`/`village_core.py` (dem neuen,
+zum ersten Mal live laufenden Code).
+
+**Programm-Output:**
+```
+=== Village Heartbeat === 2026-07-19 06:53:04
+  [brain] disabled pending explicit approval — skipping
+  [nadi] disabled pending Proof 4 approval — skipping
+  Done — GH:0 MB:0 Brain:0 Nadi:0 Pop:1 Bounties:3o/0c
+```
+Wie erwartet keine neuen Registrierungen (keine neuen Join-Kommentare).
+
+**Committeter Diff** (Commit
+[`90b81f3`](https://github.com/kimeisele/agent-village/commit/90b81f3),
+`village-heartbeat[bot]`, direkt auf `main` gepusht wie beim bisherigen
+Design): nur `data/village/state.json` (neuer `heartbeat_at`-Zeitstempel)
+und `data/village/processed_comments.json` geändert.
+
+**`pokedex.json` — NICHT migriert in diesem Lauf.** Das ist die ehrliche
+Antwort auf Kims konkrete Frage, nicht die erhoffte. Grund, im Code
+nachvollzogen: die Migration (`migrate_pokedex()`) läuft ausschließlich
+lazy, ausgelöst durch `dex_register()`/`dex_list()`
+(`heartbeat.py::_load_pokedex()`, SPEC.md §C.1). Weder `scan_github()`
+(GH:0 — keine Issues) noch `scan_moltbook()` (MB:0 — keine neuen
+Join-Kommentare) haben in diesem Lauf `dex_register()` aufgerufen;
+`update_state()` und die Pop-Ausgabe am Ende von `heartbeat()` lesen
+`pokedex.json` weiterhin über das rohe `_load(POKEDEX)`, nicht über
+`_load_pokedex()` — bewusst so gebaut (state.json ist reine
+Zusammenfassung, kein Ort, an dem eine Migration nötig wäre), hat aber zur
+Folge, dass die reale `pokedex.json` (`B_ClawAssistant`, kein `actor_id`)
+bis heute unverändert auf der Festplatte liegt. Der "Moment, in dem der
+Slice echte Daten zum ersten Mal wirklich anfasst" (Kims Formulierung)
+kommt also erst mit der nächsten echten Registrierung oder einem
+manuellen `dex_list()`-Aufruf, nicht mit diesem Lauf. Verifiziert per
+`git show origin/main:data/village/pokedex.json` nach dem Lauf — Struktur
+identisch zum Stand vor PR #3.
+
+**Nebenfund, nicht angefordert, aber real:** `processed_comments.json`
+enthält nach diesem Lauf eine ID, die vorher nicht drin war
+(`a3db1499-0f25-4c79-b8e3-e5c3b15829ca`), macht 8 statt 7 Einträge. Das ist
+die erste Live-Bestätigung, dass `_fetch_comments_resilient()` (§C.5,
+`sort=new` + `sort=old` gemerged) tatsächlich einen Kommentar sieht, der im
+alten Single-Sort-Fetch nicht erfasst gewesen wäre — der Kommentar hatte
+keine erkannte Absicht (kein Join/Claim/Done-Keyword) und wurde daher ohne
+weitere Aktion in `proc` eingetragen. Kein Fehler, aber der erste reale
+Beleg, dass die C.5-Härtung im Produktivbetrieb greift, nicht nur in
+Tests. Die Listenreihenfolge in `processed_comments.json` selbst ist
+zwischen Läufen instabil (Python-`set`, kein deterministisches Serialisieren)
+— bereits vor diesem Slice so, keine Regression.
+
+Kein Schreibzugriff über den vom Heartbeat-Workflow selbst
+vorgenommenen Commit hinaus.
