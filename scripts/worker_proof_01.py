@@ -55,7 +55,12 @@ def main() -> int:
         contract_id="contract:worker-proof-01:1",
         title="Worker Proof 1 — structural gap analysis",
         description=f"Analyze {target_file} for a short, structured list of gaps.",
-        budget=Budget(tokens=20_000, cost_usd=0.05, time_seconds=60),
+        # v2 (docs/research/AGENT_LOOP_WORKER_02.md): up to
+        # MAX_LLM_CALLS_PER_EXECUTION (4) real calls can happen in one
+        # execution now (generate + up to 2 repairs + one interpretation
+        # call), each up to DEFAULT_TIMEOUT_SECONDS (30s) -- budget sized
+        # with real headroom for that, not for a single call.
+        budget=Budget(tokens=40_000, cost_usd=0.05, time_seconds=180),
     )
     contract.activate()
 
