@@ -14,8 +14,9 @@ import time
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
+from village._types import load_json_object
 from village.contracts import Budget, ContractState, SuccessCriterion, VillageContract
 from village.village_core import (
     STATUS_ACCEPTED,
@@ -113,7 +114,9 @@ def _retry_suffix(attempts: int) -> str:
 
 # ── API helpers ─────────────────────────────────────────
 def _load(p: Path) -> dict[str, Any]:
-    return cast(dict[str, Any], json.loads(p.read_text())) if p.exists() else {}
+    if not p.exists():
+        return {}
+    return dict(load_json_object(p.read_text()))
 
 
 def _save(p: Path, d: Any) -> None:
@@ -408,7 +411,8 @@ def dex_register(name: str, actor_id: str | None = None) -> dict[str, Any]:
 
 
 def dex_list() -> list[dict[str, Any]]:
-    return cast(list[dict[str, Any]], _load_pokedex().get("agents", []))
+    agents_raw = _load_pokedex().get("agents", [])
+    return agents_raw if isinstance(agents_raw, list) else []
 
 
 # ── Bounty Board ─────────────────────────────────────────
@@ -532,7 +536,8 @@ def bounty_claim(bid: str, agent: str) -> dict[str, Any] | None:
                 contract.activate()
             _save_contract(contract)
 
-            return cast(dict[str, Any], b)
+            assert isinstance(b, dict)
+            return b
     return None
 
 

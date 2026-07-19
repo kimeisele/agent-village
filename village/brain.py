@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import re
 import urllib.request
-from typing import Any, cast
+from typing import Any
 
 # Hardened 2026-07-18 (docs/BEFUND.md §17): the original version matched
 # loose, everyday phrases anywhere in the text ("suggestion", "i wish",
@@ -49,7 +49,8 @@ def create_issue(token: str, repo: str, title: str, body: str, labels: list[str]
     req.add_header("Content-Type", "application/json")
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
-            return cast(dict[str, Any], json.loads(r.read()))
+            resp_raw = json.loads(r.read())
+            return resp_raw if isinstance(resp_raw, dict) else None
     except Exception as e:
         print(f"  [brain] create_issue failed: {e}")
         return None

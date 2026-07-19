@@ -51,7 +51,7 @@ import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any, Dict, Final, List, Optional, Sequence, Tuple, cast
+from typing import Any, Dict, Final, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger("MOLTBOOK_CAPTCHA")
 
@@ -795,7 +795,9 @@ def _extract_math(decoded_text: str) -> Optional[str]:
     if not numbers:
         return None
     if len(numbers) == 1:
-        return cast(str, numbers[0])
+        result = numbers[0]
+        assert isinstance(result, str)
+        return result
 
     text_lower = decoded_text.lower()
 

@@ -27,7 +27,7 @@ from __future__ import annotations
 import re
 import time
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import village.heartbeat as heartbeat
 from village.contracts import ContractState
@@ -103,13 +103,16 @@ def _safe_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
             return cleaned
         return value
 
-    return cast(dict[str, Any], _clean(evidence))
+    result = _clean(evidence)
+    assert isinstance(result, dict)
+    return result
 
 
 def _find_bounty(board: dict[str, Any], bounty_id: str) -> dict[str, Any] | None:
     for b in board.get("bounties", []):
         if b["id"] == bounty_id:
-            return cast(dict[str, Any], b)
+            assert isinstance(b, dict)
+            return b
     return None
 
 
@@ -118,7 +121,11 @@ def _load_submissions() -> dict[str, Any]:
 
 
 def _get_submission(submission_id: str) -> dict[str, Any] | None:
-    return cast(dict[str, Any] | None, _load_submissions().get("submissions", {}).get(submission_id))
+    submissions_raw = _load_submissions().get("submissions", {})
+    if not isinstance(submissions_raw, dict):
+        return None
+    sub = submissions_raw.get(submission_id)
+    return sub if isinstance(sub, dict) else None
 
 
 def _next_submission_id(bounty_id: str, execution_id: str) -> str:
