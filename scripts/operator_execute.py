@@ -37,12 +37,76 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 import village.bounty_review as br
 import village.heartbeat as hb
 from village.deepseek_provider import DEEPSEEK_API_KEY_VAR, DeepSeekProvider
 from village.execution_orchestrator import ExecutionRequest, run_operator_execution
+
+
+class TargetPathError(Exception):
+    """Raised by resolve_target_file() for any rejected target_file.
+    The message intentionally names only the requested (relative) input,
+    never a resolved runner filesystem path -- str(exc) is safe to print
+    or persist in the (non-secret, but still not meant to leak local
+    filesystem layout) evidence artifact."""
+
+
+def resolve_target_file(target_file: str, repo_root: Path, evidence_path: Path) -> Path:
+    """Validate and resolve the analysis target file.
+
+    `target_file` comes from a workflow_dispatch input -- untrusted in
+    the sense that it can contain anything a human types into a form,
+    including an absolute path or `../` traversal. `permissions:
+    contents: read` in the calling workflow prevents this script from
+    writing back to the repository, but it does NOT prevent reading
+    arbitrary files on the runner's local filesystem and sending their
+    content to DeepSeek -- that is a real exfiltration path this
+    function closes, structurally, before any file is read or any
+    provider is constructed.
+
+    Rejects, each with a message naming only the requested relative
+    input:
+    - an absolute `target_file` (regardless of where it would resolve),
+    - anything that resolves outside `repo_root` (`../` traversal, or a
+      symlink whose real target is outside `repo_root`),
+    - anything inside `.git/`,
+    - the evidence output file itself,
+    - a directory,
+    - a non-existent path.
+
+    Returns the resolved, validated absolute `Path` on success -- only
+    then is it safe to `read_text()`.
+    """
+    repo_root = repo_root.resolve()
+    raw = Path(target_file)
+
+    if raw.is_absolute():
+        raise TargetPathError(f"target_file must be a relative path within the repository, got an absolute path: {target_file!r}")
+
+    resolved = (repo_root / raw).resolve()  # follows any symlinks to their real target
+
+    try:
+        resolved.relative_to(repo_root)
+    except ValueError:
+        raise TargetPathError(f"target_file resolves outside the repository root: {target_file!r}") from None
+
+    git_dir = (repo_root / ".git").resolve()
+    if resolved == git_dir or git_dir in resolved.parents:
+        raise TargetPathError(f"target_file may not be inside .git/: {target_file!r}")
+
+    if resolved == evidence_path.resolve():
+        raise TargetPathError(f"target_file may not be the evidence output file itself: {target_file!r}")
+
+    if resolved.is_dir():
+        raise TargetPathError(f"target_file is a directory, not a file: {target_file!r}")
+
+    if not resolved.is_file():
+        raise TargetPathError(f"target_file not found: {target_file!r}")
+
+    return resolved
 
 
 def _snapshot(bounty_id: str, contract_id: str) -> dict:
@@ -70,9 +134,10 @@ def main() -> int:
         }, indent=2))
         return 1
 
-    target_path = Path(target_file)
-    if not target_path.is_file():
-        print(f"::error::target file not found: {target_file}")
+    try:
+        target_path = resolve_target_file(target_file, REPO_ROOT, evidence_path)
+    except TargetPathError as exc:
+        print(f"::error::{exc}")
         return 1
     file_content = target_path.read_text(errors="replace")
 

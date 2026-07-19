@@ -141,3 +141,25 @@ what gets exercised, not a parallel test-only path.
   execution names its bounty explicitly.
 - Any tie to Moltbook/GitHub ingress -- this is a purely internal,
   operator-invoked path today, not reachable from any external content.
+
+## Target file path validation (Kim's review of PR #16)
+
+Real finding: `permissions: contents: read` on `operator-execute-01.yml`
+prevents this workflow from writing back to the repository, but does
+**not** prevent it from *reading* arbitrary files on the runner's local
+filesystem and sending their content to DeepSeek -- `OPERATOR_TARGET_FILE`
+is a `workflow_dispatch` input, and nothing stopped it from being an
+absolute path or a `../` traversal before this fix.
+
+`scripts/operator_execute.py::resolve_target_file()` closes this:
+**target files are restricted to regular, non-`.git` files that resolve
+inside the repository root.** Rejected, before any file is read or any
+`DeepSeekProvider` is constructed: absolute paths (regardless of where
+they'd resolve), anything resolving outside the repo root (`../`
+traversal or a symlink whose real target escapes the root), anything
+under `.git/`, the evidence output file itself, directories, and
+non-existent paths. Error messages name only the requested (relative)
+input, never a resolved runner filesystem path. Reason: prevent
+accidental exfiltration of runner/checkout metadata (or anything else
+reachable on the runner's filesystem) to the external provider via a
+mistyped or malicious workflow input.
