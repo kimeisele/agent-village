@@ -1696,3 +1696,83 @@ Erfüllung (siehe `docs/research/AGENTIS_COLONIES_DESIGN_NOTE_01.md`,
 Datenquelle für Budget/Deadline/Erfolgskriterien. Details:
 `docs/research/VILLAGE_CONTRACTS_01.md`, Abschnitt "First production
 wiring".
+
+---
+
+## §29 — `contract_terms`-Ingress für Bounties (2026-07-19)
+
+Follow-up zu §28. Ingress-Punkt von Kim vorgegeben und bei der Analyse
+bestätigt (kein anderer Punkt gefunden): optionales `contract_terms`-Feld
+direkt auf dem Bounty-Record in `data/village/bounties.json` — derselbe
+JSON-Pfad, über den Bounties schon heute entstehen. **Nicht** der externe
+Moltbook-Claim-Kommentar — der trägt nur die `bid`; strukturierte
+Vertragsdaten aus freiem externem Text zu parsen wäre unsicher und gegen
+SPEC.md §A.8.
+
+**Datenformat:** `contract_terms` vollständig optional, jedes Unterfeld
+(`allowed_resources`/`budget`/`deadline`/`success_criteria`) ebenfalls
+optional. Geparst ausschließlich über bestehende `village/contracts.py`-
+Typen (`Budget.from_dict()`, `SuccessCriterion.from_dict()`,
+`datetime.fromisoformat()`) — keine zweite Schemafamilie.
+
+**Rückwärtskompatibilität:** ein Bounty-Record ohne `contract_terms`
+durchläuft exakt den Pfad aus PR #11 — verifiziert per eigenem Test
+(`test_legacy_bounty_without_contract_terms_is_unchanged`).
+
+**Atomare Fehlerbehandlung:** `_parse_contract_terms()` konstruiert
+Budget/SuccessCriterion-Liste/Deadline **vor** jeder Mutation von
+`bounty_claim()`. Die bestehende Validierung in `Budget`/
+`SuccessCriterion` (wirft `ValueError` bei negativem Budget, Gewicht
+außerhalb `[0,1]`, etc.) und `datetime.fromisoformat()` für die Deadline
+werden direkt genutzt, keine zweite Prüfung geschrieben. Schlägt die
+Konstruktion fehl: `bounty_claim()` gibt `None` zurück (gleiche Semantik
+wie "bid nicht gefunden"), Bounty bleibt `"open"`, `contracts.json`
+komplett unberührt — es gibt keinen Codepfad zwischen "Terms abgelehnt"
+und "Zustand mutiert", da `_save(BOUNTIES, board)` erst nach
+erfolgreichem Parsen läuft.
+
+**`bounty_complete()` bei nicht prüfbarem Erfolgskriterium:** existieren
+`success_criteria` mit mindestens einem `required`-Kriterium, dessen
+`met` nicht `True` ist, wird `fulfill()` NICHT aufgerufen (würde
+`ValueError` werfen), Contract bleibt `ACTIVE`, klar geloggt ("nicht
+automatisch verifizierbar, kein Ergebnis-Payload vorhanden"). Der Bounty-
+Record selbst wird trotzdem wie bisher auf `"done"` gesetzt (unverändert
+aus PR #11). Kein LLM-Aufruf, keine Qualitätsbewertung.
+
+**Diff:** `village/heartbeat.py` +71/-13 Zeilen (Umbau von `bounty_claim`/
+`bounty_complete`, neue Hilfsfunktion `_parse_contract_terms()`). Kein
+anderes Produktivfile geändert.
+
+**Tests:** 9 neue in `tests/test_bounty_contracts.py` (jetzt 15 insgesamt
+in der Datei), lokal ausgeführt:
+
+```
+$ python3 -m pytest tests/test_bounty_contracts.py -v
+...
+============================== 15 passed in 1.24s ==============================
+```
+
+Gesamte Suite: `python3 -m pytest tests/ -q` → **156 passed** (147
+bestehend + 9 neu), keine Regression, `git status --short data/` nach
+dem Lauf leer.
+
+**Was jetzt tatsächlich produktiv nutzbar ist:** ein Bounty-Ersteller
+(weiterhin: manuelles Editieren von `bounties.json`, da `bounty_create()`
+keinen Aufrufer hat) kann ein echtes Budget, eine Deadline, eine
+Ressourcen-Whitelist und Erfolgskriterien an einen Bounty hängen und
+sieht diese Governance-Daten in `contracts.json` landen, sobald ein
+Agent den Bounty claimt — zum ersten Mal außerhalb von Tests. Weiterhin
+keine Durchsetzungs-Runtime (nichts prüft das Budget während der Arbeit,
+nichts setzt `met`), und weiterhin keine Ingress-Quelle außer manuellem
+JSON-Edit — das bleibt die eigentliche Lücke.
+
+**Review-State oder Reputation-Tier als nächstes?** Nein, noch nicht.
+Beide (`NIGHTFORGE_DESIGN_NOTE_01.md`, `AGENTIS_COLONIES_DESIGN_NOTE_01.md`)
+setzen ein tatsächliches Arbeitsergebnis voraus, gegen das geprüft werden
+kann — das existiert nirgends im Code. Die dringlichere Lücke bleibt:
+eine echte Ingress-Quelle für `contract_terms` selbst (heute: nur
+manuelles JSON-Edit) und, davor, irgendeine Quelle für "die Arbeit ist
+fertig, hier der Beleg" — ohne die wäre ein Review-State oder ein
+Reputation-Tier nur eine weitere Schicht ohne echten Input. Details:
+`docs/research/VILLAGE_CONTRACTS_01.md`, Abschnitt "Contract terms
+ingress".

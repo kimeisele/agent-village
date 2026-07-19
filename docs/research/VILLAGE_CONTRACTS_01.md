@@ -141,6 +141,97 @@ unit-tested in isolation.
   contracts, review state, reputation tier) to become more than a
   passthrough state transition.
 
+## Contract terms ingress (follow-up slice, 2026-07-19)
+
+**Ingress point (given, confirmed on analysis, not changed):** an
+optional `contract_terms` field directly on a bounty record in
+`data/village/bounties.json` — the same internal JSON path bounties are
+already created through (`bounty_create()` is never called; bounties are
+plain JSON records). **Not** the external Moltbook claim comment — that
+only ever carries the `bid`; parsing structured contract data out of
+free external text would be exactly what SPEC.md §A.8 forbids (external
+content is DATA, never instructions). This was the fallback the earlier
+document's "Natural future integration point" section anticipated, not a
+workaround improvised now.
+
+**Exact new data format:**
+
+```json
+{
+  "id": "b004",
+  "...": "existing bounty fields, unchanged",
+  "contract_terms": {
+    "allowed_resources": ["Read", "Grep"],
+    "budget": {"tokens": 20000, "cost_usd": 0.5, "time_seconds": 3600, "cognitive_units": null},
+    "deadline": "2026-07-25T12:00:00+00:00",
+    "success_criteria": [
+      {"name": "review_posted", "description": "...", "required": true, "weight": 1.0}
+    ]
+  }
+}
+```
+
+`contract_terms` is entirely optional (the field may be absent), and
+every one of its sub-fields is independently optional. Parsed with the
+*existing* `village/contracts.py` types only — no second schema:
+`Budget.from_dict()`, `[SuccessCriterion.from_dict(c) for c in ...]`,
+`datetime.fromisoformat()`.
+
+**Backward compatibility:** a bounty record without `contract_terms`
+takes the exact code path that existed before this slice (PR #11) —
+`allowed_resources=[]`, `Budget()` (fully unconstrained), `deadline=None`,
+`success_criteria=[]`. Verified by
+`test_legacy_bounty_without_contract_terms_is_unchanged`, which asserts
+the resulting contract is identical to the pre-this-slice behavior.
+
+**Atomicity — how a partial state is prevented:** `_parse_contract_terms()`
+constructs `Budget`/`SuccessCriterion`/the deadline `datetime` **before**
+`bounty_claim()` mutates anything. `Budget`/`SuccessCriterion` validate
+themselves at construction (raising `ValueError` on e.g. a negative
+budget or an out-of-range weight — the existing validation from
+`village/contracts.py`, not a second copy); a malformed deadline string
+raises via `datetime.fromisoformat()`. Any exception there is caught
+immediately, logged, and `bounty_claim()` returns `None` — the exact same
+return value as "bid not found" — with the bounty record still `"open"`
+and `contracts.json` completely untouched. There is no code path between
+"terms rejected" and "state mutated"; the bounty's `_save(BOUNTIES,
+board)` call happens strictly after the parse succeeds.
+
+**`bounty_complete()` and unverifiable success criteria:** if a
+contract has `success_criteria` and at least one `required` criterion's
+`met` is not `True`, `fulfill()` is **not** called (it would raise) and
+the contract stays `ACTIVE` — logged explicitly as "not automatically
+verifiable, no result payload to check against," never silently treated
+as passed. The bounty record itself still moves to `"done"`, unchanged
+from PR #11 — this slice does not touch that. No LLM call, no quality
+judgment of any kind, anywhere in this path.
+
+**What's now actually usable in production:** a bounty creator (still:
+manually editing `bounties.json`, since `bounty_create()` has no caller)
+can attach a real budget, deadline, resource whitelist, and success
+criteria to a bounty, and see that governance data land in
+`contracts.json` the moment an agent claims it — the first time any of
+`VillageContract`'s budget/deadline/success-criteria fields are
+populated from something other than a test. Still no enforcement loop
+(nothing checks the budget while work happens, nothing marks a criterion
+`met`), and still no ingress path *other than* hand-editing the bounty
+JSON — that remains the real gap.
+
+**Does review-state or reputation-tier follow next, or something else?**
+Neither yet. Both `docs/research/NIGHTFORGE_DESIGN_NOTE_01.md` (review
+state) and `docs/research/AGENTIS_COLONIES_DESIGN_NOTE_01.md`
+(reputation tier) assume a *result* exists to judge — a PR, a
+verification payload, something concrete a `SuccessCriterion.met` could
+be set from. This slice makes criteria checkable, but nothing yet
+produces the evidence to check them against, and nothing sets `met`
+except a test or a human editing JSON by hand. The more immediate gap is
+still what this document already named: a real ingress path for
+`contract_terms` itself (today: manual JSON edit only) and, before either
+follow-on concept becomes meaningful, *some* source of "the work is
+actually done, here's the evidence" — without that, a review state or a
+reputation tier would just be one more layer with nothing real feeding
+it.
+
 ## Remaining gaps before any real mission execution
 
 - No ingress path supplies contract parameters yet (see above).
