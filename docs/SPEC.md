@@ -479,9 +479,24 @@ removed with `nadi_daemon.py` (hermes-sankhya-25, BEFUND §22).
 
 ## D. Explicitly deferred (not deleted from the vision, just out of this slice)
 
-GitHub Discussions ingress; Cognition-port code; LLM calls; NADI ingress;
-automatic PR generation; autonomous code execution; full Mission Factory;
-complex reputation/governance; token economy.
+GitHub Discussions ingress; Cognition-port code; LLM calls (for content
+cognition — classification, recommendation, or anything feeding a
+Contribution/decision, per §A.5); NADI ingress; automatic PR generation;
+autonomous code execution; full Mission Factory; complex
+reputation/governance; token economy.
+
+**Existing, narrower exception, not covered by the above:**
+`village/moltbook_captcha.py::_deepseek_solve()` is a pre-existing (ported
+from steward-protocol, predates SPEC v2), narrowly-scoped LLM fallback for
+solving Moltbook's obfuscated math verify-challenges when the deterministic
+`CaptchaChamber` solver returns no confident answer. It never classifies
+content, never feeds a Contribution or any decision, and never gets write
+authority beyond submitting a computed number to Moltbook's own `/verify`
+endpoint — categorically different from the "LLM calls" deferred above.
+Gated behind `VILLAGE_CHALLENGE_LLM_ENABLED=1` (off by default) and requires
+`DEEPSEEK_API_KEY` (not currently set) — inert today, but its existence is
+intentional and this line exists so a future reader doesn't mistake §D's
+blanket "LLM calls" for a claim that no LLM code exists anywhere yet.
 
 ## E. Acceptance criteria
 
