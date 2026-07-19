@@ -526,21 +526,29 @@ intentional and this line exists so a future reader doesn't mistake §D's
 blanket "LLM calls" for a claim that no LLM code exists anywhere yet.
 
 **Second exception, narrower still:** `village/worker.py` (docs/research/
-INTERNAL_WORKER_PROOF_01.md) runs a bounded DeepSeek call
-(`village/deepseek_provider.py`) against a `VillageContract`'s work order
-and produces a `WorkResult`. This is content cognition — it analyzes a
-file and returns structured output — but it never feeds a `Contribution`,
+INTERNAL_WORKER_PROOF_01.md, extended by docs/research/
+AGENT_LOOP_WORKER_02.md into a bounded agent loop — GENERATE → INTERPRET
+→ EVALUATE → optional REPAIR, hard-capped at
+`MAX_LLM_CALLS_PER_EXECUTION = 4` total provider calls per execution)
+runs bounded DeepSeek calls (`village/deepseek_provider.py`,
+`village/interpreter.py`) against a `VillageContract`'s work order and
+produces a `WorkResult`. This is content cognition — it analyzes a file
+and returns structured output — but it never feeds a `Contribution`,
 never classifies ingress content, and structurally cannot fulfill the
 Contract or complete a bounty (`tests/test_worker_no_write_authority.py`
-proves, via AST inspection of `village/worker.py`'s own source, that it
-never calls `.fulfill(`/`bounty_complete(` and never imports
-`village.heartbeat`). Its output is submitted/review-pending evidence
-only — no code path treats it as an authoritative decision, per §A.5.
-Reachable only via `.github/workflows/worker-proof-01.yml`
-(`workflow_dispatch` only, `permissions: contents: read`, no
-push/pull_request trigger) — merged but not activated: no
-`DEEPSEEK_API_KEY` repo secret exists yet, and enabling one is a separate
-decision, not a consequence of this file existing.
+proves, via AST inspection of both `village/worker.py`'s and
+`village/interpreter.py`'s own source, that neither calls
+`.fulfill(`/`bounty_complete(` and neither imports `village.heartbeat`).
+Its output is submitted/review-pending evidence only — no code path
+treats it as an authoritative decision, per §A.5; the interpretation-only
+call this loop may spend is itself prompt-constrained to reformat an
+existing answer, never to perform new analysis. Reachable only via
+`.github/workflows/worker-proof-01.yml` (`workflow_dispatch` only,
+`permissions: contents: read`, no push/pull_request trigger).
+`DEEPSEEK_API_KEY` is now set as a repo secret (2026-07-19, Kim's
+explicit, separate decision) — the workflow is live but still only
+runnable by a human manually triggering `workflow_dispatch`, never by
+anything automated or externally reachable.
 
 ## E. Acceptance criteria
 

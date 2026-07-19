@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import inspect
 
+import village.interpreter as interpreter
 import village.worker as worker
 
 
@@ -39,12 +40,27 @@ def test_worker_source_never_calls_fulfill_or_bounty_complete():
     assert "bounty_complete" not in calls
 
 
+def _imported_module_names(source: str) -> set[str]:
+    tree = ast.parse(source)
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names.add(node.module)
+    return names
+
+
 def test_worker_module_does_not_import_heartbeat():
     """village/heartbeat.py owns bounty_complete(); the worker must not
-    even be able to reach it via import, not just avoid calling it."""
-    source = inspect.getsource(worker)
-    assert "village.heartbeat" not in source
-    assert "import heartbeat" not in source
+    even be able to reach it via import, not just avoid calling it. AST
+    import-node check, not a substring grep -- this module's own
+    docstring explains the guarantee in prose (mentioning
+    "village.heartbeat" by name), which a substring check would
+    false-positive on."""
+    imports = _imported_module_names(inspect.getsource(worker))
+    assert "village.heartbeat" not in imports
+    assert not any(m.startswith("village.heartbeat") for m in imports)
 
 
 def test_worker_module_has_no_subprocess_or_shell_execution():
@@ -54,3 +70,27 @@ def test_worker_module_has_no_subprocess_or_shell_execution():
     source = inspect.getsource(worker)
     for forbidden in ("subprocess", "os.system", "eval(", "exec(", "__import__"):
         assert forbidden not in source, f"found forbidden construct: {forbidden}"
+
+
+def test_interpreter_module_also_never_calls_fulfill_or_bounty_complete():
+    """v2 adds a second LLM call site (village/interpreter.py's
+    build_interpretation_prompt is invoked from worker.py) -- the
+    boundary must hold there too, not just in worker.py."""
+    calls = _call_names(inspect.getsource(interpreter))
+    assert "fulfill" not in calls
+    assert "bounty_complete" not in calls
+
+
+def test_interpreter_module_has_no_subprocess_or_shell_execution():
+    source = inspect.getsource(interpreter)
+    for forbidden in ("subprocess", "os.system", "eval(", "exec(", "__import__"):
+        assert forbidden not in source, f"found forbidden construct: {forbidden}"
+
+
+def test_max_llm_calls_per_execution_is_a_small_fixed_constant():
+    """The new hard limit this slice adds (not weakening PR #13's
+    guarantees, adding a new one): a repair loop must have a fixed,
+    named, small ceiling -- not "unbounded because budget allows it"."""
+    assert worker.MAX_LLM_CALLS_PER_EXECUTION == 4
+    assert worker.MAX_REPAIR_ATTEMPTS == 2
+    assert worker.MAX_LLM_CALLS_PER_EXECUTION < 10  # sanity: "small", not just "finite"

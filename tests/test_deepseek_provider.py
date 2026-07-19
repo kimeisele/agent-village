@@ -1,7 +1,9 @@
 """
-Tests for village/deepseek_provider.py. No real API calls -- urllib's
-urlopen is monkeypatched with recorded/synthetic responses. Includes the
-explicit secret-redaction test required for this slice.
+Tests for village/deepseek_provider.py (v2: full-fidelity CognitiveResponse,
+thinking mode disabled by default). No real API calls -- urllib's urlopen
+is monkeypatched with recorded/synthetic responses. Includes the explicit
+secret-redaction test required for this slice -- now covering both the
+GENERATE and INTERPRET call paths' worth of error scenarios.
 """
 
 from __future__ import annotations
@@ -67,25 +69,115 @@ def test_missing_api_key_raises_auth_error_without_calling_network(monkeypatch):
     assert calls == []  # never even attempted a network call
 
 
-# ── Successful call ───────────────────────────────────────────────────────
+# ── Full-fidelity response handling ───────────────────────────────────────
 
 
-def test_successful_call_returns_parsed_response(monkeypatch):
+def test_content_only_response(monkeypatch):
     _mock_success(monkeypatch, {
-        "choices": [{"message": {"content": '{"gaps": []}'}}],
+        "choices": [{"message": {"content": '{"gaps": []}'}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
     })
     provider = dsp.DeepSeekProvider(model="deepseek-v4-flash", api_key=FAKE_SECRET)
 
     resp = provider.complete("analyze this", max_tokens=100, timeout_seconds=5)
 
-    assert resp.content == '{"gaps": []}'
+    assert resp.visible_text == '{"gaps": []}'
+    assert resp.reasoning_text is None
+    assert resp.finish_reason == "stop"
     assert resp.provider == "deepseek"
     assert resp.model == "deepseek-v4-flash"
     assert resp.usage.prompt_tokens == 100
     assert resp.usage.completion_tokens == 20
     assert resp.usage.total_tokens == 120
     assert resp.usage.cost_usd > 0
+
+
+def test_reasoning_content_field_is_captured_separately(monkeypatch):
+    """The PR #13 root cause, now handled: reasoning_content is a
+    distinct field from content, per
+    https://api-docs.deepseek.com/api/create-chat-completion, and must
+    be surfaced as its own field, not merged into or confused with
+    visible_text."""
+    _mock_success(monkeypatch, {
+        "choices": [{
+            "message": {"content": "", "reasoning_content": "internal thinking trace here"},
+            "finish_reason": "length",
+        }],
+        "usage": {
+            "prompt_tokens": 100, "completion_tokens": 2000, "total_tokens": 2100,
+            "completion_tokens_details": {"reasoning_tokens": 2000},
+        },
+    })
+    provider = dsp.DeepSeekProvider(api_key=FAKE_SECRET)
+
+    resp = provider.complete("analyze this", max_tokens=2000, timeout_seconds=5)
+
+    assert resp.visible_text == ""
+    assert resp.reasoning_text == "internal thinking trace here"
+    assert resp.finish_reason == "length"
+    assert resp.usage.reasoning_tokens == 2000
+    assert resp.usage.completion_tokens == 2000
+
+
+def test_finish_reason_is_always_surfaced(monkeypatch):
+    for reason in ("stop", "length", "content_filter"):
+        _mock_success(monkeypatch, {
+            "choices": [{"message": {"content": "x"}, "finish_reason": reason}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        })
+        provider = dsp.DeepSeekProvider(api_key=FAKE_SECRET)
+        resp = provider.complete("x", max_tokens=10, timeout_seconds=5)
+        assert resp.finish_reason == reason
+
+
+def test_missing_reasoning_content_field_defaults_to_none(monkeypatch):
+    """Older/non-thinking responses simply omit the field -- must not
+    error, must not become an empty string that's indistinguishable from
+    "the model reasoned and produced nothing"."""
+    _mock_success(monkeypatch, {
+        "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    })
+    provider = dsp.DeepSeekProvider(api_key=FAKE_SECRET)
+    resp = provider.complete("x", max_tokens=10, timeout_seconds=5)
+    assert resp.reasoning_text is None
+
+
+# ── Thinking mode disabled by default ──────────────────────────────────────
+
+
+def test_thinking_mode_is_disabled_by_default(monkeypatch):
+    captured_body = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured_body.update(json.loads(req.data))
+        return _FakeHTTPResponse(json.dumps({
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }).encode())
+
+    monkeypatch.setattr(dsp.urllib.request, "urlopen", fake_urlopen)
+    provider = dsp.DeepSeekProvider(api_key=FAKE_SECRET)
+    provider.complete("x", max_tokens=10, timeout_seconds=5)
+
+    assert captured_body.get("thinking") == {"type": "disabled"}
+
+
+def test_thinking_mode_can_be_explicitly_enabled(monkeypatch):
+    captured_body = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured_body.update(json.loads(req.data))
+        return _FakeHTTPResponse(json.dumps({
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }).encode())
+
+    monkeypatch.setattr(dsp.urllib.request, "urlopen", fake_urlopen)
+    provider = dsp.DeepSeekProvider(api_key=FAKE_SECRET, thinking_enabled=True)
+    provider.complete("x", max_tokens=10, timeout_seconds=5)
+
+    assert "thinking" not in captured_body  # only sent when explicitly disabling
 
 
 def test_default_model_is_deepseek_v4_flash(monkeypatch):
@@ -163,15 +255,18 @@ def test_unexpected_response_shape_raises_provider_response_error(monkeypatch):
 
 
 # ── Secret redaction (explicit, required test) ────────────────────────────
+# With multiple calls per execution now possible (GENERATE + repair +
+# interpretation), every one of these error paths matters equally --
+# there is no "safe" call site.
 
 
 def test_api_key_never_appears_in_any_raised_exception(monkeypatch, capsys):
     """The single most important test in this file: whatever goes wrong,
-    the credential must never leak into an exception message, and
-    therefore never into a log line derived from str(exception)."""
+    on any call, the credential must never leak into an exception
+    message, and therefore never into a log line derived from
+    str(exception)."""
     scenarios = []
 
-    # HTTP error path
     _mock_http_error(monkeypatch, 500, {"error": {"message": "server error"}})
     provider = dsp.DeepSeekProvider(api_key=FAKE_SECRET)
     try:
@@ -180,7 +275,6 @@ def test_api_key_never_appears_in_any_raised_exception(monkeypatch, capsys):
         scenarios.append(str(e))
         scenarios.append(repr(e))
 
-    # Auth error path (401)
     _mock_http_error(monkeypatch, 401, {"error": {"message": "invalid key"}})
     try:
         provider.complete("x", max_tokens=10, timeout_seconds=5)
@@ -188,7 +282,6 @@ def test_api_key_never_appears_in_any_raised_exception(monkeypatch, capsys):
         scenarios.append(str(e))
         scenarios.append(repr(e))
 
-    # Malformed response path
     def fake_urlopen(req, timeout=None):
         return _FakeHTTPResponse(b"not json")
     monkeypatch.setattr(dsp.urllib.request, "urlopen", fake_urlopen)
@@ -198,7 +291,17 @@ def test_api_key_never_appears_in_any_raised_exception(monkeypatch, capsys):
         scenarios.append(str(e))
         scenarios.append(repr(e))
 
-    assert len(scenarios) >= 3
+    # A second, independent provider instance -- simulates the
+    # interpretation-call site using the SAME provider object across
+    # multiple calls in one execution, as village/worker.py does.
+    _mock_http_error(monkeypatch, 429, {"error": {"message": "rate limited"}})
+    try:
+        provider.complete("interpretation-call prompt", max_tokens=10, timeout_seconds=5)
+    except Exception as e:
+        scenarios.append(str(e))
+        scenarios.append(repr(e))
+
+    assert len(scenarios) >= 4
     for text in scenarios:
         assert FAKE_SECRET not in text
 
@@ -207,17 +310,19 @@ def test_api_key_never_appears_in_any_raised_exception(monkeypatch, capsys):
     assert FAKE_SECRET not in captured.err
 
 
-def test_api_key_never_appears_in_the_provider_response_object(monkeypatch):
-    """The successful-path ProviderResponse (including `.raw`, which
+def test_api_key_never_appears_in_the_cognitive_response_object(monkeypatch):
+    """The successful-path CognitiveResponse (including `.raw`, which
     might get persisted as evidence) must not contain the key either --
     it only ever appears in the outgoing request's Authorization header,
-    never in anything DeepSeek echoes back."""
+    never in anything DeepSeek echoes back. Checked across both
+    content-only and reasoning-bearing responses."""
     _mock_success(monkeypatch, {
-        "choices": [{"message": {"content": "ok"}}],
+        "choices": [{"message": {"content": "ok", "reasoning_content": "thinking..."}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     })
     provider = dsp.DeepSeekProvider(api_key=FAKE_SECRET)
     resp = provider.complete("x", max_tokens=10, timeout_seconds=5)
 
     assert FAKE_SECRET not in json.dumps(resp.raw)
-    assert FAKE_SECRET not in resp.content
+    assert FAKE_SECRET not in resp.visible_text
+    assert FAKE_SECRET not in (resp.reasoning_text or "")

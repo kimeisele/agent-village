@@ -1885,3 +1885,106 @@ WorkResult liest, von einem Menschen bewerten lässt und erst dann,
 separat vom Worker-Code, `SuccessCriterion.met = True` setzt und
 `contract.fulfill()` aufruft — schließt den hier bewusst offen
 gelassenen Kreis, ohne das Modell je selbst-autorisierend zu machen.
+
+---
+
+## §31 — Agent Loop Worker 02: aus One-Shot-Caller wird ein echter Cognitive Worker (2026-07-19)
+
+Follow-up zu §30, nach dem ersten echten Live-Lauf (`INVALID_OUTPUT`,
+leerer `content` bei vollem 2000-Token-Limit). Vollständiger Bericht:
+`docs/research/AGENT_LOOP_WORKER_02.md`. `DEEPSEEK_API_KEY` ist
+zwischenzeitlich als echtes Repo-Secret gesetzt (Kims separate,
+explizite Entscheidung) — der Workflow ist lauffähig, weiterhin nur per
+manuellem `workflow_dispatch`.
+
+**Root Cause des ersten Laufs, jetzt geklärt:** direkt gegen
+`https://api-docs.deepseek.com/api/create-chat-completion` und
+`https://api-docs.deepseek.com/guides/thinking_mode` verifiziert:
+`deepseek-v4-flash` hat Thinking-Mode standardmäßig aktiviert; Reasoning
+landet in einem getrennten `message.reasoning_content`-Feld, nicht in
+`content`. Bei `finish_reason: "length"` kann `content` leer sein,
+während `reasoning_content` echten Text enthält — genau der beobachtete
+Fall. Fix: Thinking-Mode standardmäßig deaktiviert
+(`{"thinking": {"type": "disabled"}}`), UND `reasoning_content`/
+`finish_reason` werden trotzdem immer vollständig gelesen (defensiv,
+falls Thinking-Mode je wieder aktiv ist).
+
+**Recon in kimeisele/steward (gezielt, read-only, nicht kopiert):**
+`steward/loop/engine.py` (volle Tool-Loop mit Router/Registry/
+Parallelität — explizit NICHT übernommen, genau die "volle
+Steward-Autonomie", die ausgeschlossen war), `steward/buddhi.py`
+(Outcome-Evaluation, schwer Sankhya-benannt — Namen NICHT übernommen,
+die eine übertragbare Idee dahinter — Phasenübergang aus einem
+konkreten beobachteten Signal entscheiden, nicht aus einem blinden
+Rundenzähler — floss in `_evaluate_failure_reason()` ein),
+`steward/cbr.py` (dynamische DSP-Signalkette für Token-Budget — NICHT
+übernommen, echte, aber hier unnötige Abstraktion; das bestehende
+`VillageContract.budget` reicht). Details inkl. welche Datei welche Idee
+lieferte: `docs/research/AGENT_LOOP_WORKER_02.md` Schritt 0.
+
+**Neue/geänderte Module (weiterhin stdlib-only):**
+- `village/cognitive_provider.py` — `CognitiveResponse` ersetzt
+  `ProviderResponse`: `visible_text`, `reasoning_text`, `finish_reason`,
+  volle Usage inkl. `reasoning_tokens`. Kein JSON-Zwang mehr auf dieser
+  Ebene.
+- `village/deepseek_provider.py` — Thinking-Mode aus, vollständige
+  Response-Behandlung.
+- `village/interpreter.py` — neu, drei Stufen: (a) deterministische
+  Extraktion aus `===RESULT_BEGIN===`/`===RESULT_END===`-Markern, (b)
+  toleranter Parser (balancierte `{...}`-Suche), (c) Prompt für einen
+  zweiten, rein reformatierenden LLM-Call — "keine neue Analyse" ist im
+  Prompttext selbst zweimal erzwungen, testgeprüft
+  (`test_interpretation_prompt_forbids_new_analysis_explicitly`), nicht
+  nur behauptet.
+- `village/worker.py` — AgentLoop: GENERATE → INTERPRET → EVALUATE →
+  optional REPAIR (Obergrenze) → FINISHED. Neue harte Konstante:
+  `MAX_REPAIR_ATTEMPTS = 2`, `MAX_LLM_CALLS_PER_EXECUTION = 4` (1
+  Generate + 2 Repair + 1 optionaler Interpretations-Call) — exakte
+  Zahl im Code benannt, nicht implizit.
+
+**Design-Korrektur während der Testarbeit gefunden (kein nachträglicher
+Fix, sondern Beleg, dass der Prozess funktioniert):** der erste Entwurf
+hätte den einen Interpretations-Call auch bei leerer/abgeschnittener
+Antwort verbraucht, obwohl da nichts Verwertbares zum Reformatieren da
+ist. Gefixt: Interpretations-Call nur bei `candidate_is_substantive`
+(nicht-leerer Text UND `finish_reason != "length"`) — reserviert für den
+Fall, wo er wirklich hilft (echter Inhalt, falsche Struktur).
+
+**Budget:** mehrere Calls kumulieren jetzt korrekt gegen dasselbe
+Contract-Budget (`contract.record_usage()`/`check_budget()` nach JEDEM
+Call, nicht nur am Ende) — testgeprüft
+(`test_multiple_calls_cumulate_against_the_same_budget`). Eine
+Budgetüberschreitung mitten in der Schleife stoppt sofort, kein weiterer
+Call. `DEFAULT_CALL_MAX_TOKENS = 4096` — realistisch, nicht mehr am
+2000er-Limit geknapst wie im ersten Lauf.
+
+**Tests:** `tests/test_interpreter.py` (12, neu),
+`tests/test_worker.py` (20, vorher 17, für Mehrfach-Call-Szenarien
+umgebaut), `tests/test_deepseek_provider.py` (17, vorher 12, inkl.
+Reasoning-Content/Thinking-Mode/Repair-Obergrenze-Fälle),
+`tests/test_worker_no_write_authority.py` um 2 Fälle erweitert (prüft
+jetzt auch `village/interpreter.py` per AST, plus die
+`MAX_LLM_CALLS_PER_EXECUTION`-Konstante selbst). Lokal ausgeführt:
+
+```
+$ python3 -m pytest tests/ -q
+........................................................................ [ 33%]
+........................................................................ [ 66%]
+........................................................................ [ 99%]
+..                                                                       [100%]
+218 passed in 2.15s
+```
+Keine Regression, kein echter API-Call in irgendeinem Test
+(`FakeProvider`-Skriptsequenzen bzw. gemocktes `urllib.request.urlopen`),
+`git status --short data/` nach dem Lauf leer.
+
+**Grenzen unverändert aus PR #13, keine davon aufgeweicht:** weiterhin
+nur `workflow_dispatch`, `permissions: contents: read`, weiterhin nie
+`fulfill()`/`bounty_complete()` (AST-Test jetzt auch auf
+`interpreter.py` erweitert), weiterhin kein Shell/eval auf Modell-Output,
+weiterhin kein Secret-Leak (jetzt über mehrere Call-Pfade pro Execution
+geprüft, nicht nur einen), weiterhin keine Repo-Schreibrechte.
+
+**Nächster Schritt:** zweiter echter Live-Lauf, gleicher Analyseauftrag
+(`village/heartbeat.py`), nach grünem CI und Kims Review — Befund folgt
+in einem eigenen Abschnitt.
