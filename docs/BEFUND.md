@@ -1157,3 +1157,12 @@ Hart auf `secrets.GITHUB_TOKEN` gesetzt, Fallback vollständig entfernt.
   Testkommentare) und in `processed_comments.json` als verarbeitet
   getrackt. **Keine neuen Kommentare von Inanna oder apiale777.** Nichts
   ausgelöst.
+
+### Nachtrag: CI für Tests eingerichtet und selbst verifiziert
+
+`.github/workflows/tests.yml` (push+PR auf main, `pytest tests/`) neu
+angelegt — reine Verifikations-Infrastruktur, kein Produkt-Scope-Zuwachs.
+Erster echter Lauf durch den eigenen Push ausgelöst und beobachtet:
+[Run 29674990442](https://github.com/kimeisele/agent-village/actions/runs/29674990442),
+grün, **87/87 bestanden** — jetzt unabhängig im Actions-Log nachprüfbar,
+nicht mehr nur lokal behauptet.
