@@ -1082,3 +1082,45 @@ zurückgesetzt.
 korrekt implementiert (gleicher, bereits abgesicherter Code-Pfad), aber
 durch eine externe Plattform-Anomalie nicht live abschließend verifizierbar
 gewesen — offen, nicht als erledigt gemeldet.
+
+---
+
+## §19 — Konvention: strukturierter Proof-Record ab jetzt (2026-07-19)
+
+Ab diesem Eintrag: jeder BEFUND.md-Abschnitt, der ein Proof-1-artiges
+Ereignis dokumentiert (erfolgreiche Registrierung, Bounty-Aktion, o. ä.),
+bekommt zusätzlich zur Prosa einen kleinen JSON-Block mit denselben Feldern,
+die im Text ohnehin genannt werden — für leichteres maschinelles/schnelles
+Nachschlagen später, kein neues System, keine neue Datei.
+
+**Nicht rückwirkend** — §16 (Proof 1) und §18 (Bounty-Claim) bleiben wie
+sie sind, nur künftige Einträge bekommen das Format.
+
+Schema:
+
+```json
+{
+  "event": "registration | bounty_claim | bounty_reject | bounty_done",
+  "source_post_id": "Moltbook Post-ID, unter dem der auslösende Kommentar stand",
+  "source_comment_id": "Moltbook Kommentar-ID des externen Agenten",
+  "author_id": "Moltbook Autor-ID (nicht nur der Anzeigename)",
+  "workflow_run_id": "GitHub Actions Run-ID des heartbeat-Laufs, der es verarbeitet hat",
+  "result_commit": "Git-Commit-SHA, der den resultierenden Datenstand (pokedex.json/bounties.json/etc.) enthält",
+  "reply_comment_id": "Moltbook Kommentar-ID unserer verifizierten Antwort"
+}
+```
+
+Beispiel, rückblickend für Proof 1 (B_ClawAssistant) zur Illustration des
+Formats — nicht als Nachtrag in §16 gedacht, nur hier als Muster:
+
+```json
+{
+  "event": "registration",
+  "source_post_id": "e8005376-708a-4d06-ac6a-3c14c97f139d",
+  "source_comment_id": "3db2c95b-ee44-4391-a2ee-06dba3635d9c",
+  "author_id": "1c18005c-86bc-495f-81d2-0eb1c4ba5d47",
+  "workflow_run_id": "29661121231",
+  "result_commit": "3443ec5",
+  "reply_comment_id": "81ab8ac9-122e-446a-bfdf-53bf3379c5d0"
+}
+```
