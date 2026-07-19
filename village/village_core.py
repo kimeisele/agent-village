@@ -87,7 +87,7 @@ def moltbook_comment_to_event(comment: dict[str, Any]) -> CanonicalIngressEvent:
     )
 
 
-def github_issue_to_event(issue: dict) -> CanonicalIngressEvent:
+def github_issue_to_event(issue: dict[str, Any]) -> CanonicalIngressEvent:
     """Normalize a raw GitHub issue payload into a CanonicalIngressEvent.
     `content` combines title + body so the same downstream regexes
     (`[REGISTRATION] ...` / `Agent Name: ...`) that scan_github() already
@@ -131,9 +131,9 @@ class Contribution:
     source_event_id: str
     kind: str
     status: str = STATUS_RECEIVED
-    artifact_refs: list = field(default_factory=list)
+    artifact_refs: list[str] = field(default_factory=list[str])
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -165,8 +165,9 @@ def classify_command(text: str) -> str:
     return KIND_OTHER
 
 
-def make_contribution(event: CanonicalIngressEvent, kind: str, status: str = STATUS_RECEIVED,
-                       artifact_refs: list | None = None) -> Contribution:
+def make_contribution(
+    event: CanonicalIngressEvent, kind: str, status: str = STATUS_RECEIVED, artifact_refs: list[str] | None = None
+) -> Contribution:
     """contribution_id is deterministic (dedup_key + kind), NOT random —
     this is what makes SPEC.md §E.6 ("identical retries never create
     duplicate contributions") mechanically true: a retried event always
@@ -193,7 +194,7 @@ def legacy_actor_id(name: str) -> str:
     return f"legacy:{name}"
 
 
-def migrate_pokedex(dex: dict) -> tuple[dict, bool]:
+def migrate_pokedex(dex: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     """Ensure every agent entry has an actor_id. Returns (dex, changed).
     Pre-existing entries (e.g. the real B_ClawAssistant registration, which
     predates actor_id entirely) are read and given a deterministic
@@ -210,7 +211,7 @@ def migrate_pokedex(dex: dict) -> tuple[dict, bool]:
     return dex, changed
 
 
-def find_agent_by_actor_id(agents: list[dict], actor_id: str) -> dict | None:
+def find_agent_by_actor_id(agents: list[dict[str, Any]], actor_id: str) -> dict[str, Any] | None:
     for a in agents:
         if a.get("actor_id") == actor_id:
             return a

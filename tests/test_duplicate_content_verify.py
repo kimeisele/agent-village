@@ -17,7 +17,8 @@ def test_already_existed_failed_comment_is_not_verified(monkeypatch, tmp_path):
     monkeypatch.setattr(hb, "CHALLENGE_STATE", tmp_path / "challenge_failures.json")
     monkeypatch.setattr(hb, "REPLY_COMMENT_IDS", tmp_path / "reply_comment_ids.json")
     monkeypatch.setattr(
-        hb, "_mb",
+        hb,
+        "_mb",
         lambda path, method="GET", body=None: {
             "success": True,
             "message": "You already said this on this post! Here is your existing comment.",
@@ -42,7 +43,8 @@ def test_already_existed_pending_comment_is_not_verified(monkeypatch, tmp_path):
     monkeypatch.setattr(hb, "CHALLENGE_STATE", tmp_path / "challenge_failures.json")
     monkeypatch.setattr(hb, "REPLY_COMMENT_IDS", tmp_path / "reply_comment_ids.json")
     monkeypatch.setattr(
-        hb, "_mb",
+        hb,
+        "_mb",
         lambda path, method="GET", body=None: {
             "success": True,
             "already_existed": True,
@@ -69,9 +71,12 @@ def test_retry_suffix_makes_consecutive_registration_attempts_differ(monkeypatch
 
     join_comment = {"id": "c1", "content": "join", "author": {"name": "B_ClawAssistant"}}
     monkeypatch.setattr(
-        hb, "_mb",
+        hb,
+        "_mb",
         lambda path, method="GET", body=None: (
-            {"success": True, "comments": [join_comment]} if "comments" in path and method == "GET" else {"success": True}
+            {"success": True, "comments": [join_comment]}
+            if "comments" in path and method == "GET"
+            else {"success": True}
         ),
     )
 

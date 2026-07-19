@@ -21,10 +21,14 @@ def test_already_verified_without_fresh_challenge(monkeypatch, tmp_path):
     success."""
     monkeypatch.setattr(hb, "CHALLENGE_STATE", tmp_path / "challenge_failures.json")
     monkeypatch.setattr(hb, "REPLY_COMMENT_IDS", tmp_path / "reply_comment_ids.json")
-    monkeypatch.setattr(hb, "_mb", lambda path, method="GET", body=None: {
-        "success": True,
-        "comment": {"id": "c1", "content": "hi", "verification_status": "verified"},
-    })
+    monkeypatch.setattr(
+        hb,
+        "_mb",
+        lambda path, method="GET", body=None: {
+            "success": True,
+            "comment": {"id": "c1", "content": "hi", "verification_status": "verified"},
+        },
+    )
     result = hb._post_comment_verified("post123", "hello", parent_id="c0")
     # comment_id now always included (docs/SPEC.md §C.5 — persist the
     # Moltbook POST result id immediately, regardless of verify outcome).
@@ -38,10 +42,14 @@ def test_no_verification_status_at_all_is_not_verified(monkeypatch, tmp_path):
     success — this was the old (wrong) fallback behavior."""
     monkeypatch.setattr(hb, "CHALLENGE_STATE", tmp_path / "challenge_failures.json")
     monkeypatch.setattr(hb, "REPLY_COMMENT_IDS", tmp_path / "reply_comment_ids.json")
-    monkeypatch.setattr(hb, "_mb", lambda path, method="GET", body=None: {
-        "success": True,
-        "comment": {"id": "c1", "content": "hi"},
-    })
+    monkeypatch.setattr(
+        hb,
+        "_mb",
+        lambda path, method="GET", body=None: {
+            "success": True,
+            "comment": {"id": "c1", "content": "hi"},
+        },
+    )
     result = hb._post_comment_verified("post123", "hello", parent_id="c0")
     assert result["posted"] is True
     assert result["verified"] is False
@@ -166,7 +174,9 @@ def test_banned_flag_sticky_across_a_later_success(monkeypatch, tmp_path):
 
 def test_load_state_restores_monitor_counters(monkeypatch, tmp_path):
     state_path = tmp_path / "challenge_failures.json"
-    state_path.write_text('{"consecutive_failures": 3, "total_attempts": 7, "total_successes": 4, "total_failures": 3, "halted": false}')
+    state_path.write_text(
+        '{"consecutive_failures": 3, "total_attempts": 7, "total_successes": 4, "total_failures": 3, "halted": false}'
+    )
     monkeypatch.setattr(hb, "CHALLENGE_STATE", state_path)
 
     fresh_monitor = mc.ChallengeMonitor()

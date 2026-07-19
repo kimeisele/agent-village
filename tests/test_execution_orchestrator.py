@@ -43,20 +43,25 @@ def _setup(monkeypatch, tmp_path):
     monkeypatch.setattr(hb, "BOUNTIES", tmp_path / "bounties.json")
     monkeypatch.setattr(hb, "CONTRACTS", tmp_path / "contracts.json")
     monkeypatch.setattr(br, "SUBMISSIONS", tmp_path / "bounty_submissions.json")
-    hb._save(hb.BOUNTIES, {
-        "bounties": [{
-            "id": "b001",
-            "title": "Review village/heartbeat.py",
-            "description": "Read and review the heartbeat scanner.",
-            "reward": "reputation",
-            "status": "open",
-            "created_by": "agent-village",
-            "created_at": 0.0,
-            "claimed_by": None,
-            "claimed_at": None,
-            "completed_at": None,
-        }]
-    })
+    hb._save(
+        hb.BOUNTIES,
+        {
+            "bounties": [
+                {
+                    "id": "b001",
+                    "title": "Review village/heartbeat.py",
+                    "description": "Read and review the heartbeat scanner.",
+                    "reward": "reputation",
+                    "status": "open",
+                    "created_by": "agent-village",
+                    "created_at": 0.0,
+                    "claimed_by": None,
+                    "claimed_at": None,
+                    "completed_at": None,
+                }
+            ]
+        },
+    )
 
 
 def _claim(actor_id="SomeAgent"):
@@ -65,8 +70,11 @@ def _claim(actor_id="SomeAgent"):
 
 def _usage(prompt_tokens=100, completion_tokens=50, cost_usd=0.001, duration=0.5) -> ProviderUsage:
     return ProviderUsage(
-        prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
-        total_tokens=prompt_tokens + completion_tokens, cost_usd=cost_usd, duration_seconds=duration,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        cost_usd=cost_usd,
+        duration_seconds=duration,
     )
 
 
@@ -75,15 +83,21 @@ VALID_MARKED = f'{RESULT_BEGIN}\n{{"gaps": [{{"description": "no tests for X", "
 
 def _success_response() -> CognitiveResponse:
     return CognitiveResponse(
-        visible_text=VALID_MARKED, reasoning_text=None, finish_reason="stop",
-        usage=_usage(), provider="fake", model="fake-model-01",
+        visible_text=VALID_MARKED,
+        reasoning_text=None,
+        finish_reason="stop",
+        usage=_usage(),
+        provider="fake",
+        model="fake-model-01",
     )
 
 
 def _request(bounty_id="b001", actor_id="SomeAgent") -> eo.ExecutionRequest:
     return eo.ExecutionRequest(
-        bounty_id=bounty_id, actor_id=actor_id,
-        target_file="village/heartbeat.py", instruction="Find gaps.",
+        bounty_id=bounty_id,
+        actor_id=actor_id,
+        target_file="village/heartbeat.py",
+        instruction="Find gaps.",
     )
 
 
@@ -125,8 +139,12 @@ def test_invalid_output_leaves_bounty_claimed_no_submission(monkeypatch, tmp_pat
     _setup(monkeypatch, tmp_path)
     _claim("SomeAgent")
     bad = CognitiveResponse(
-        visible_text="never valid, no markers, no json", reasoning_text=None, finish_reason="stop",
-        usage=_usage(), provider="fake", model="fake-model-01",
+        visible_text="never valid, no markers, no json",
+        reasoning_text=None,
+        finish_reason="stop",
+        usage=_usage(),
+        provider="fake",
+        model="fake-model-01",
     )
     provider = FakeProvider(script=[bad, bad, bad, bad])  # exhausts MAX_LLM_CALLS_PER_EXECUTION
 
@@ -267,8 +285,12 @@ def test_evidence_secret_redaction_still_applies_through_the_full_path(monkeypat
     _setup(monkeypatch, tmp_path)
     _claim("SomeAgent")
     response = CognitiveResponse(
-        visible_text=VALID_MARKED, reasoning_text=None, finish_reason="stop",
-        usage=_usage(), provider="fake", model="fake-model-01",
+        visible_text=VALID_MARKED,
+        reasoning_text=None,
+        finish_reason="stop",
+        usage=_usage(),
+        provider="fake",
+        model="fake-model-01",
     )
     provider = FakeProvider(script=[response])
 
@@ -290,8 +312,12 @@ def test_real_usage_is_persisted_to_the_contract_even_on_failure(monkeypatch, tm
     _setup(monkeypatch, tmp_path)
     _claim("SomeAgent")
     bad = CognitiveResponse(
-        visible_text="", reasoning_text=None, finish_reason="length",
-        usage=_usage(prompt_tokens=500, completion_tokens=500), provider="fake", model="fake-model-01",
+        visible_text="",
+        reasoning_text=None,
+        finish_reason="length",
+        usage=_usage(prompt_tokens=500, completion_tokens=500),
+        provider="fake",
+        model="fake-model-01",
     )
     provider = FakeProvider(script=[bad, bad, bad, bad])
 
@@ -308,11 +334,17 @@ def test_no_automatic_retry_of_a_failed_mission(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     _claim("SomeAgent")
     bad = CognitiveResponse(
-        visible_text="not usable", reasoning_text=None, finish_reason="stop",
-        usage=_usage(), provider="fake", model="fake-model-01",
+        visible_text="not usable",
+        reasoning_text=None,
+        finish_reason="stop",
+        usage=_usage(),
+        provider="fake",
+        model="fake-model-01",
     )
     provider = FakeProvider(script=[bad, bad, bad, bad])  # worker's own internal cap, not the orchestrator's
 
     eo.run_operator_execution(_request(), provider, "file content")
 
-    assert provider.calls == 4  # exactly the worker's own MAX_LLM_CALLS_PER_EXECUTION, no orchestrator-level retry on top
+    assert (
+        provider.calls == 4
+    )  # exactly the worker's own MAX_LLM_CALLS_PER_EXECUTION, no orchestrator-level retry on top

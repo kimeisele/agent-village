@@ -57,7 +57,7 @@ class ExecutionOutcome:
     accepted: bool
     reason: str | None
     work_result: WorkResult | None
-    submission: dict | None
+    submission: dict[str, Any] | None
 
 
 def _find_bounty(board: dict[str, Any], bounty_id: str) -> dict[str, Any] | None:

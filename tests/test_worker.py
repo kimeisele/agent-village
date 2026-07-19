@@ -69,15 +69,23 @@ def _order() -> WorkOrder:
 
 def _usage(prompt_tokens=100, completion_tokens=50, reasoning_tokens=0, cost_usd=0.001, duration=0.5) -> ProviderUsage:
     return ProviderUsage(
-        prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, reasoning_tokens=reasoning_tokens,
-        total_tokens=prompt_tokens + completion_tokens, cost_usd=cost_usd, duration_seconds=duration,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        reasoning_tokens=reasoning_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        cost_usd=cost_usd,
+        duration_seconds=duration,
     )
 
 
 def _response(visible_text="", reasoning_text=None, finish_reason="stop", usage=None) -> CognitiveResponse:
     return CognitiveResponse(
-        visible_text=visible_text, reasoning_text=reasoning_text, finish_reason=finish_reason,
-        usage=usage or _usage(), provider="fake", model="fake-model-01",
+        visible_text=visible_text,
+        reasoning_text=reasoning_text,
+        finish_reason=finish_reason,
+        usage=usage or _usage(),
+        provider="fake",
+        model="fake-model-01",
     )
 
 
@@ -125,10 +133,12 @@ def test_mixed_content_and_reasoning_uses_visible_text_first():
 
 def test_truncated_response_triggers_repair_then_succeeds():
     contract = _active_contract(tokens=100_000, cost_usd=1.0)
-    provider = FakeProvider(script=[
-        _response(visible_text="", reasoning_text="ran out of room", finish_reason="length"),
-        _response(visible_text=VALID_MARKED, finish_reason="stop"),
-    ])
+    provider = FakeProvider(
+        script=[
+            _response(visible_text="", reasoning_text="ran out of room", finish_reason="length"),
+            _response(visible_text=VALID_MARKED, finish_reason="stop"),
+        ]
+    )
 
     result = run_work_order(contract, _order(), "file content", provider)
 
@@ -141,10 +151,12 @@ def test_truncated_response_triggers_repair_then_succeeds():
 
 def test_empty_response_triggers_repair_with_specific_reason():
     contract = _active_contract(tokens=100_000, cost_usd=1.0)
-    provider = FakeProvider(script=[
-        _response(visible_text="", reasoning_text=None, finish_reason="stop"),
-        _response(visible_text=VALID_MARKED, finish_reason="stop"),
-    ])
+    provider = FakeProvider(
+        script=[
+            _response(visible_text="", reasoning_text=None, finish_reason="stop"),
+            _response(visible_text=VALID_MARKED, finish_reason="stop"),
+        ]
+    )
 
     result = run_work_order(contract, _order(), "file content", provider)
 
@@ -161,10 +173,18 @@ def test_no_usable_result_block_falls_back_to_interpretation_call():
     stage (c), the interpretation-only call, should be used before
     giving up."""
     contract = _active_contract(tokens=100_000, cost_usd=1.0)
-    provider = FakeProvider(script=[
-        _response(visible_text="I found that heartbeat.py lacks tests for X, in file village/heartbeat.py.", finish_reason="stop"),
-        _response(visible_text='{"gaps": [{"description": "lacks tests for X", "file": "village/heartbeat.py"}]}', finish_reason="stop"),
-    ])
+    provider = FakeProvider(
+        script=[
+            _response(
+                visible_text="I found that heartbeat.py lacks tests for X, in file village/heartbeat.py.",
+                finish_reason="stop",
+            ),
+            _response(
+                visible_text='{"gaps": [{"description": "lacks tests for X", "file": "village/heartbeat.py"}]}',
+                finish_reason="stop",
+            ),
+        ]
+    )
 
     result = run_work_order(contract, _order(), "file content", provider)
 
@@ -179,11 +199,13 @@ def test_interpretation_call_used_at_most_once_per_execution():
     the loop must repair-regenerate rather than spend a second
     interpretation call."""
     contract = _active_contract(tokens=100_000, cost_usd=1.0)
-    provider = FakeProvider(script=[
-        _response(visible_text="unstructured answer one", finish_reason="stop"),
-        _response(visible_text="still not JSON", finish_reason="stop"),  # interpretation call, also fails
-        _response(visible_text=VALID_MARKED, finish_reason="stop"),  # repair-regenerate succeeds
-    ])
+    provider = FakeProvider(
+        script=[
+            _response(visible_text="unstructured answer one", finish_reason="stop"),
+            _response(visible_text="still not JSON", finish_reason="stop"),  # interpretation call, also fails
+            _response(visible_text=VALID_MARKED, finish_reason="stop"),  # repair-regenerate succeeds
+        ]
+    )
 
     result = run_work_order(contract, _order(), "file content", provider)
 
@@ -221,10 +243,16 @@ def test_max_llm_calls_and_max_repair_attempts_are_named_constants_with_expected
 
 def test_multiple_calls_cumulate_against_the_same_budget():
     contract = _active_contract(tokens=1_000, cost_usd=1.0)  # 1000 tokens total across the WHOLE execution
-    provider = FakeProvider(script=[
-        _response(visible_text="", finish_reason="length", usage=_usage(prompt_tokens=200, completion_tokens=200)),  # 400 tokens
-        _response(visible_text=VALID_MARKED, finish_reason="stop", usage=_usage(prompt_tokens=200, completion_tokens=200)),  # +400 = 800
-    ])
+    provider = FakeProvider(
+        script=[
+            _response(
+                visible_text="", finish_reason="length", usage=_usage(prompt_tokens=200, completion_tokens=200)
+            ),  # 400 tokens
+            _response(
+                visible_text=VALID_MARKED, finish_reason="stop", usage=_usage(prompt_tokens=200, completion_tokens=200)
+            ),  # +400 = 800
+        ]
+    )
 
     result = run_work_order(contract, _order(), "file content", provider)
 
@@ -235,15 +263,23 @@ def test_multiple_calls_cumulate_against_the_same_budget():
 
 def test_budget_exceeded_mid_loop_stops_immediately_no_further_calls():
     contract = _active_contract(tokens=500)  # first call alone (400 tokens) is fine, but leaves only 100 remaining
-    provider = FakeProvider(script=[
-        _response(visible_text="", finish_reason="length", usage=_usage(prompt_tokens=200, completion_tokens=200)),  # 400, ok
-        _response(visible_text=VALID_MARKED, usage=_usage(prompt_tokens=200, completion_tokens=200)),  # would be +400 = 800 > 500
-    ])
+    provider = FakeProvider(
+        script=[
+            _response(
+                visible_text="", finish_reason="length", usage=_usage(prompt_tokens=200, completion_tokens=200)
+            ),  # 400, ok
+            _response(
+                visible_text=VALID_MARKED, usage=_usage(prompt_tokens=200, completion_tokens=200)
+            ),  # would be +400 = 800 > 500
+        ]
+    )
 
     result = run_work_order(contract, _order(), "file content", provider)
 
     assert result.status == WorkResultStatus.BUDGET_EXCEEDED
-    assert provider.calls == 2  # the second (over-budget) call still happened -- usage is checked AFTER the call, not predicted before
+    assert (
+        provider.calls == 2
+    )  # the second (over-budget) call still happened -- usage is checked AFTER the call, not predicted before
     assert "tokens" in result.error
 
 
@@ -257,15 +293,19 @@ def test_provider_error_on_first_call_stops_immediately():
     result = run_work_order(contract, _order(), "file content", provider)
 
     assert result.status == WorkResultStatus.PROVIDER_ERROR
-    assert provider.calls == 1  # complete() was invoked once; it raised, worker's own calls_made counter (checked via no repair happening) does not advance past it
+    assert (
+        provider.calls == 1
+    )  # complete() was invoked once; it raised, worker's own calls_made counter (checked via no repair happening) does not advance past it
 
 
 def test_provider_error_during_repair_stops_immediately():
     contract = _active_contract(tokens=100_000, cost_usd=1.0)
-    provider = FakeProvider(script=[
-        _response(visible_text="", finish_reason="length"),
-        ProviderTimeoutError("timed out"),
-    ])
+    provider = FakeProvider(
+        script=[
+            _response(visible_text="", finish_reason="length"),
+            ProviderTimeoutError("timed out"),
+        ]
+    )
 
     result = run_work_order(contract, _order(), "file content", provider)
 

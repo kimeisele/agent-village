@@ -46,8 +46,13 @@ def test_status_enum_string_values_are_stable():
 
 def test_naive_started_at_is_normalized_to_utc_aware():
     r = WorkResult(
-        work_result_id="w", contract_id="c", execution_id="e", provider="p", model="m",
-        status=WorkResultStatus.FAILED, started_at=datetime(2026, 7, 19, 12, 0, 0),  # naive
+        work_result_id="w",
+        contract_id="c",
+        execution_id="e",
+        provider="p",
+        model="m",
+        status=WorkResultStatus.FAILED,
+        started_at=datetime(2026, 7, 19, 12, 0, 0),  # naive
     )
     assert r.started_at.tzinfo is not None
 
@@ -56,7 +61,11 @@ def test_status_accepts_plain_string_on_construction():
     """Convenience: constructing with the raw string value (as from_dict
     would produce before enum coercion) must not error."""
     r = WorkResult(
-        work_result_id="w", contract_id="c", execution_id="e", provider="p", model="m",
+        work_result_id="w",
+        contract_id="c",
+        execution_id="e",
+        provider="p",
+        model="m",
         status="succeeded",
     )
     assert r.status == WorkResultStatus.SUCCEEDED

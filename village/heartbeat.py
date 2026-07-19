@@ -116,7 +116,7 @@ def _load(p: Path) -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(p.read_text())) if p.exists() else {}
 
 
-def _save(p: Path, d):
+def _save(p: Path, d: Any) -> None:
     """Write-to-temp-then-atomic-replace (docs/research/
     BOUNTY_REVIEW_GATE_01.md Blocker 3): protects each individual file
     against a process crash mid-write leaving behind truncated/corrupt
@@ -132,7 +132,7 @@ def _save(p: Path, d):
     tmp.replace(p)
 
 
-def _api(url, token=None, body=None, method="GET"):
+def _api(url: str, token: str | None = None, body: dict[str, Any] | None = None, method: str = "GET") -> Any:
     if not token:
         return None
     h = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -161,11 +161,11 @@ def _api(url, token=None, body=None, method="GET"):
         return None
 
 
-def _gh(path, method="GET", body=None):
+def _gh(path: str, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
     return _api(f"https://api.github.com/repos/{REPO}/{path}", GH, body, method)
 
 
-def _mb(path, method="GET", body=None):
+def _mb(path: str, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
     return _api(f"https://www.moltbook.com/api/v1/{path}", MB, body, method)
 
 
@@ -205,7 +205,7 @@ def _save_challenge_monitor_state() -> None:
     _save(CHALLENGE_STATE, state)
 
 
-def _post_comment_verified(post_id: str, content: str, parent_id: str | None = None) -> dict:
+def _post_comment_verified(post_id: str, content: str, parent_id: str | None = None) -> dict[str, Any]:
     """Post a Moltbook comment and, if it triggers a verify challenge
     (see docs/BEFUND.md §3), solve it automatically via
     village/moltbook_captcha.py and submit the answer before the comment
@@ -230,7 +230,7 @@ def _post_comment_verified(post_id: str, content: str, parent_id: str | None = N
         print(f"  [mb] challenge monitor halted this cycle, skipping comment: {content[:50]!r}")
         return {"posted": False, "reason": "monitor_halted"}
 
-    body: dict = {"content": content}
+    body: dict[str, Any] = {"content": content}
     if parent_id:
         body["parent_id"] = parent_id
     resp = _mb(f"posts/{post_id}/comments", "POST", body)
@@ -340,7 +340,7 @@ _GD = {
 }
 
 
-def derive(name: str) -> dict:
+def derive(name: str) -> dict[str, Any]:
     low = name.lower().lstrip("_")
     el = _EL.get(low[0] if low else "a", "akasha")
     seed = sum(ord(c) for c in name)
@@ -362,7 +362,7 @@ def derive(name: str) -> dict:
 
 
 # ── Pokedex ──────────────────────────────────────────────
-def _load_pokedex() -> dict:
+def _load_pokedex() -> dict[str, Any]:
     """Load pokedex.json, migrating any pre-actor_id entries in place
     (docs/SPEC.md §C.1/§E.3). Migration is idempotent — re-running it on
     an already-migrated file is a no-op (no `changed`, no write)."""
@@ -373,7 +373,7 @@ def _load_pokedex() -> dict:
     return dex
 
 
-def dex_register(name: str, actor_id: str | None = None) -> dict:
+def dex_register(name: str, actor_id: str | None = None) -> dict[str, Any]:
     """Register (or return the existing entry for) an agent, keyed by
     `actor_id` (docs/SPEC.md §C.1) — NOT by display name. Two different
     actor_ids that happen to choose the same display name get two separate
@@ -416,8 +416,8 @@ def bounty_create(
     title: str,
     description: str,
     reward: str = "reputation",
-    contract_terms: dict | None = None,
-) -> dict:
+    contract_terms: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """`contract_terms`, if given, is stored verbatim on the bounty and
     parsed by `bounty_claim()` via the existing `_parse_contract_terms()`
     -- no separate creation-time validation, same atomic-rejection-on-
@@ -446,7 +446,7 @@ def bounty_create(
     return bounty
 
 
-def bounty_list(status: str = "open") -> list[dict]:
+def bounty_list(status: str = "open") -> list[dict[str, Any]]:
     return [b for b in _load(BOUNTIES).get("bounties", []) if b.get("status") == status]
 
 
@@ -468,7 +468,7 @@ def _save_contract(contract: VillageContract) -> None:
     _save(CONTRACTS, store)
 
 
-def _parse_contract_terms(terms: dict) -> tuple[list[str], Budget, "datetime | None", list[SuccessCriterion]]:
+def _parse_contract_terms(terms: dict[str, Any]) -> tuple[list[str], Budget, "datetime | None", list[SuccessCriterion]]:
     """Parse a bounty's optional `contract_terms` field into the existing
     village/contracts.py types -- no second schema, no new validation.
     `Budget`/`SuccessCriterion` validate themselves at construction
@@ -571,7 +571,7 @@ def bounty_complete(bid: str) -> dict[str, Any] | None:
 
 # ── Contributions (docs/SPEC.md §C.3/§C.4) ──────────────────────────────
 def _record_contribution(
-    event: CanonicalIngressEvent, kind: str, status: str, artifact_refs: list | None = None
+    event: CanonicalIngressEvent, kind: str, status: str, artifact_refs: list[str] | None = None
 ) -> None:
     """Upsert a Contribution keyed by its deterministic contribution_id
     (dedup_key + kind) — an identical retry of the same event/kind recomputes
@@ -629,7 +629,7 @@ def scan_github() -> int:
 
 
 # ── Moltbook Scanner ─────────────────────────────────────
-def _empty_pending() -> dict:
+def _empty_pending() -> dict[str, Any]:
     return {"registration": {}, "bounty_claim": {}, "bounty_reject": {}, "bounty_done": {}}
 
 
@@ -654,7 +654,7 @@ def _retry_event(cid: str, actor_id: str, display_name: str) -> CanonicalIngress
     )
 
 
-def _fetch_comments_resilient(post_id: str) -> list[dict]:
+def _fetch_comments_resilient(post_id: str) -> list[dict[str, Any]]:
     """Fetch a post's comments tolerating the two listing gaps documented
     in docs/MOLTBOOK_CONTRACT_NOTES.md points 7/8: `sort=new` has been
     observed to (temporarily or, once, durably) not show a just-created
@@ -664,7 +664,7 @@ def _fetch_comments_resilient(post_id: str) -> list[dict]:
     relying on a single sort order. Does not solve point 8's fully-invisible
     case (nothing server-side to fetch in that scenario) but does close the
     much more common "wrong sort order missed it" gap."""
-    seen: dict[str, dict] = {}
+    seen: dict[str, dict[str, Any]] = {}
     for sort in ("new", "old"):
         resp = _mb(f"posts/{post_id}/comments?sort={sort}&limit=50")
         if not resp or not resp.get("success"):
@@ -867,11 +867,11 @@ def scan_moltbook() -> int:
                 )
                 continue
             bid = m.group(1)
-            result = bounty_claim(bid, sender)  # type: ignore[assignment]
-            if result:
+            claim_result = bounty_claim(bid, sender)
+            if claim_result:
                 reply = _post_comment_verified(
                     REG_POST,
-                    f"🦞 **{sender}** claimed bounty `{bid}`: {result['title']}",
+                    f"🦞 **{sender}** claimed bounty `{bid}`: {claim_result['title']}",
                     parent_id=cid,
                 )
                 if reply.get("verified"):
@@ -883,7 +883,7 @@ def scan_moltbook() -> int:
                     pending["bounty_claim"][cid] = {
                         "bid": bid,
                         "sender": sender,
-                        "title": result["title"],
+                        "title": claim_result["title"],
                         "attempts": 1,
                     }
                     _record_contribution(event, "bounty_claim", STATUS_RECEIVED)
@@ -913,11 +913,11 @@ def scan_moltbook() -> int:
                 )
                 continue
             bid = m.group(1)
-            result = bounty_complete(bid)  # type: ignore[assignment]
-            if result:
+            complete_result = bounty_complete(bid)
+            if complete_result:
                 reply = _post_comment_verified(
                     REG_POST,
-                    f"✅ Bounty `{bid}` complete: {result['title']} — claimed by {result['claimed_by']}",
+                    f"✅ Bounty `{bid}` complete: {complete_result['title']} — claimed by {complete_result['claimed_by']}",
                     parent_id=cid,
                 )
                 if reply.get("verified"):
@@ -930,8 +930,8 @@ def scan_moltbook() -> int:
                 else:
                     pending["bounty_done"][cid] = {
                         "bid": bid,
-                        "title": result["title"],
-                        "claimed_by": result["claimed_by"],
+                        "title": complete_result["title"],
+                        "claimed_by": complete_result["claimed_by"],
                         "attempts": 1,
                     }
                     print(f"  [mb] bounty {bid} done reply not verified ({reply.get('reason')}), retrying next cycle")
@@ -1025,7 +1025,7 @@ def scan_brain() -> int:
 
 
 # ── State ────────────────────────────────────────────────
-def update_state():
+def update_state() -> None:
     dex = _load(POKEDEX)
     s = {
         "village": VILLAGE,
@@ -1040,7 +1040,7 @@ def update_state():
 
 
 # ── Main ─────────────────────────────────────────────────
-def heartbeat():
+def heartbeat() -> int:
     print(f"=== Village Heartbeat === {time.strftime('%Y-%m-%d %H:%M:%S')}")
     _load_challenge_monitor_state()
     gh = scan_github()

@@ -389,6 +389,8 @@ class TestLlmFallback:
         monkeypatch.setattr(mc, "_deepseek_solve", lambda challenge_text: None)
 
         calls = []
-        result = solve_and_verify(lambda *a: calls.append(a) or {"success": True}, {"verification_code": "x", "challenge_text": "gibberish"})
+        result = solve_and_verify(
+            lambda *a: calls.append(a) or {"success": True}, {"verification_code": "x", "challenge_text": "gibberish"}
+        )
         assert result["reason"] == "low_confidence"
         assert len(calls) == 0

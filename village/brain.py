@@ -29,6 +29,7 @@ from typing import Any, cast
 _FEATURE_PREFIX = re.compile(r"^\s*(feature|suggestion|idea|proposal)\s*:", re.I)
 _BUG_PREFIX = re.compile(r"^\s*(bug|fix)\s*:", re.I)
 
+
 def is_actionable(text: str) -> tuple[bool, str]:
     """Check if a comment opens with an explicit label prefix. Returns (is_actionable, kind)."""
     if _FEATURE_PREFIX.match(text):
@@ -36,6 +37,7 @@ def is_actionable(text: str) -> tuple[bool, str]:
     if _BUG_PREFIX.match(text):
         return True, "bug"
     return False, ""
+
 
 def create_issue(token: str, repo: str, title: str, body: str, labels: list[str]) -> dict[str, Any] | None:
     """Create a GitHub Issue. Returns issue data or None."""

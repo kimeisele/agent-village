@@ -36,6 +36,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))  # noqa: E402 — standalone script, must add repo root before importing village.*
@@ -127,7 +128,7 @@ def resolve_target_file(target_file: str, repo_root: Path, evidence_path: Path) 
     return resolved
 
 
-def _snapshot(bounty_id: str, contract_id: str) -> dict:
+def _snapshot(bounty_id: str, contract_id: str) -> dict[str, Any]:
     board = hb._load(hb.BOUNTIES)
     bounty = next((b for b in board.get("bounties", []) if b["id"] == bounty_id), None)
     contract = hb._load_contract(contract_id)

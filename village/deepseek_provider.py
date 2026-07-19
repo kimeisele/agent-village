@@ -47,6 +47,7 @@ import os
 import time
 import urllib.error
 import urllib.request
+from typing import Any
 
 from village.cognitive_provider import (
     CognitiveProvider,
@@ -94,7 +95,7 @@ class DeepSeekProvider(CognitiveProvider):
         if not self._api_key:
             raise ProviderAuthError(f"{DEEPSEEK_API_KEY_VAR} not set")
 
-        request_body: dict = {
+        request_body: dict[str, Any] = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0,

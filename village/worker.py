@@ -34,6 +34,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 
 from village.cognitive_provider import (
     CognitiveProvider,
@@ -118,7 +119,7 @@ def build_repair_prompt(order: WorkOrder, file_content: str, reason: str) -> str
     )
 
 
-def _empty_usage() -> dict:
+def _empty_usage() -> dict[str, Any]:
     return {
         "prompt_tokens": 0,
         "completion_tokens": 0,
@@ -129,7 +130,7 @@ def _empty_usage() -> dict:
     }
 
 
-def _accumulate(total: dict, response: CognitiveResponse) -> None:
+def _accumulate(total: dict[str, Any], response: CognitiveResponse) -> None:
     total["prompt_tokens"] += response.usage.prompt_tokens
     total["completion_tokens"] += response.usage.completion_tokens
     total["reasoning_tokens"] += response.usage.reasoning_tokens
@@ -173,12 +174,12 @@ def run_work_order(
     started_at = datetime.now(timezone.utc)
     model_hint = getattr(provider, "model", "?")
 
-    phase_log: list[dict] = []
+    phase_log: list[dict[str, Any]] = []
     cumulative_usage = _empty_usage()
     calls_made = 0
     interpretation_call_used = False
 
-    def finish(status: WorkResultStatus, error: str | None = None, output: dict | None = None) -> WorkResult:
+    def finish(status: WorkResultStatus, error: str | None = None, output: dict[str, Any] | None = None) -> WorkResult:
         return WorkResult(
             work_result_id=work_result_id,
             contract_id=contract.contract_id,

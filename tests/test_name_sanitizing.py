@@ -84,8 +84,11 @@ def test_long_name_registers_truncated_to_40_chars(monkeypatch, tmp_path):
     lorem = "Lorem ipsum dolor sit amet consectetur adipiscing elit sed do " * 3  # 200+ chars
     comment = {"id": "c1", "content": f"join name: {lorem}", "author": {"name": "sender1"}}
     monkeypatch.setattr(
-        hb, "_mb",
-        lambda path, method="GET", body=None: _comments_response(comment) if "comments" in path and method == "GET" else {"success": True},
+        hb,
+        "_mb",
+        lambda path, method="GET", body=None: _comments_response(comment)
+        if "comments" in path and method == "GET"
+        else {"success": True},
     )
     hb.scan_moltbook()
     agents = hb._load(hb.POKEDEX).get("agents", [])
@@ -105,8 +108,11 @@ def test_control_chars_in_name_are_cleaned_before_storing(monkeypatch, tmp_path)
     # case against _sanitize_name() itself, bypassing the regex.
     comment = {"id": "c1", "content": "join name: Bo\tb\x00", "author": {"name": "sender1"}}
     monkeypatch.setattr(
-        hb, "_mb",
-        lambda path, method="GET", body=None: _comments_response(comment) if "comments" in path and method == "GET" else {"success": True},
+        hb,
+        "_mb",
+        lambda path, method="GET", body=None: _comments_response(comment)
+        if "comments" in path and method == "GET"
+        else {"success": True},
     )
     hb.scan_moltbook()
     agents = hb._load(hb.POKEDEX).get("agents", [])
@@ -119,8 +125,11 @@ def test_name_field_with_only_control_chars_falls_back_to_sender(monkeypatch, tm
     _setup(monkeypatch, tmp_path)
     comment = {"id": "c1", "content": "join name: \x00\x01\x02", "author": {"name": "RealSender"}}
     monkeypatch.setattr(
-        hb, "_mb",
-        lambda path, method="GET", body=None: _comments_response(comment) if "comments" in path and method == "GET" else {"success": True},
+        hb,
+        "_mb",
+        lambda path, method="GET", body=None: _comments_response(comment)
+        if "comments" in path and method == "GET"
+        else {"success": True},
     )
     hb.scan_moltbook()
     agents = hb._load(hb.POKEDEX).get("agents", [])

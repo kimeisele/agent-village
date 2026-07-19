@@ -29,12 +29,13 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any
 
 RESULT_BEGIN = "===RESULT_BEGIN==="
 RESULT_END = "===RESULT_END==="
 
 
-def _validate_structure(parsed: object) -> tuple[dict | None, str | None]:
+def _validate_structure(parsed: object) -> tuple[dict[str, Any] | None, str | None]:
     """Deterministic STRUCTURAL validation only -- never a judgment of
     whether the analysis is any good, only whether it's the shape asked
     for. Shared by all three interpretation stages so the acceptance
@@ -53,7 +54,7 @@ def _strip_fence(text: str) -> str:
     return re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip()).strip()
 
 
-def extract_marked_block(text: str) -> tuple[dict | None, str | None]:
+def extract_marked_block(text: str) -> tuple[dict[str, Any] | None, str | None]:
     """Stage (a): deterministic extraction between explicit markers.
     Returns (None, reason) if the markers are missing or don't contain
     valid+well-shaped JSON."""
@@ -61,7 +62,7 @@ def extract_marked_block(text: str) -> tuple[dict | None, str | None]:
     end = text.find(RESULT_END)
     if start == -1 or end == -1 or end <= start:
         return None, "no marked result block found"
-    block = text[start + len(RESULT_BEGIN):end]
+    block = text[start + len(RESULT_BEGIN) : end]
     block = _strip_fence(block)
     try:
         parsed = json.loads(block)
@@ -70,7 +71,7 @@ def extract_marked_block(text: str) -> tuple[dict | None, str | None]:
     return _validate_structure(parsed)
 
 
-def tolerant_parse(text: str) -> tuple[dict | None, str | None]:
+def tolerant_parse(text: str) -> tuple[dict[str, Any] | None, str | None]:
     """Stage (b): no markers required. Tries the whole text as JSON
     first (after stripping an accidental markdown fence), then falls
     back to the first balanced `{...}` span found anywhere in the text
@@ -93,7 +94,7 @@ def tolerant_parse(text: str) -> tuple[dict | None, str | None]:
             if depth > 0:
                 depth -= 1
                 if depth == 0 and start_idx is not None:
-                    candidate = text[start_idx:i + 1]
+                    candidate = text[start_idx : i + 1]
                     try:
                         parsed = json.loads(candidate)
                     except ValueError:

@@ -2199,3 +2199,46 @@ Begründung und stufenweisem Plan zu `strict = true`.
 **Bewusst deferred, dokumentiert mit konkretem Folgeplan:**
 `disallow_any_generics = true` — siehe TYPE_SAFETY_FOUNDATION_01.md für
 die genaue Begründung und den stufenweisen Weg.
+
+---
+
+## §34 — Type Safety Foundation 01: Ruff + mypy + JsonValue (2026-07-19, korrigiert)
+
+**Ausgangszustand:** Kein Type-Checker, kein Linter, 7 reale mypy-Fehler
+(dokumentiert in TYPE_SAFETY_BASELINE_01.md).
+
+**Jetzt aktiv (nach Review-Korrekturen):**
+
+- **pyproject.toml:** reine Tool-Konfiguration (kein `[project]`, kein
+  `[build-system]`). Dev-Dependencies in `requirements-dev.txt` mit
+  gepinnten Versionen (pytest==8.0.0, ruff==0.8.1, mypy==1.18.2).
+- **Ruff:** E, F, I, W mit `ignore = ["E501"]` (Formatter übernimmt
+  Zeilenlänge). `ruff check` + `ruff format --check` beide in CI.
+- **mypy:** 8 Regeln aktiv — `disallow_any_generics`,
+  `disallow_untyped_defs`, `check_untyped_defs`, `no_implicit_optional`,
+  `warn_unused_ignores`, `warn_redundant_casts`, `warn_return_any`,
+  `strict_equality`. 0 Fehler in 16 Quell-Dateien.
+- **`ignore_missing_imports`:** nicht benötigt. `cryptography` ist
+  installiert und typisiert (PEP 561), `nadi_bridge.py` hat keinen
+  mypy-Fehler.
+- **6 untypisierte Produktionsfunktionen annotiert** (`_save`, `_api`,
+  `_gh`, `_mb`, `update_state`, `heartbeat`).
+- **~50 Bare-Generic-Stellen** mit korrekten Typparametern versehen
+  (`list[str]`, `list[CaptchaCandidate]`, `re.Match[str]`, etc.).
+- **`village/_types.py`:** rekursiver `JsonValue`-Typ (Python-3.11-
+  kompatibel via `TypeAlias`) + `is_json_value()` TypeGuard +
+  `load_json_object()` mit vollständiger Validierung (NaN/Infinity-
+  Rejection, rekursive Prüfung).
+- **`str(submission_id)`** durch `isinstance(raw, str)`-Guard ersetzt.
+- **`# type: ignore[assignment]`** entfernt — Variablen umbenannt
+  (`claim_result`, `complete_result`).
+- **CI:** `requirements-dev.txt` → ruff check → ruff format --check →
+  mypy → pytest. Job-Name `pytest` unverändert.
+- **327 Tests** (302 bestehend + 25 neu in `test_type_safety.py`).
+- **Negativnachweise:** bare dict, untypisierte Funktion, falscher
+  Rückgabetyp, ungenutzter Ignore, Ruff-Regelverstoß, Format-Abweichung
+  — alle erkannt und rückgängig gemacht.
+
+**Bewusst offen:** `disallow_any_explicit`, volles `strict = true`.
+
+**Dokumentation:** `docs/research/TYPE_SAFETY_FOUNDATION_01.md` (aktualisiert).
