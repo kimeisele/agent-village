@@ -14,7 +14,13 @@ maßgeblich.**
    Aufgabe. Festgelegt wird die Autoritätsgrenze, nicht der interne
    Algorithmus.)
 3. Internal Innovation — AUSDRÜCKLICH UNBEGRÜNDET, offene Frage, kein
-   Prinzip (siehe vorherige Nachricht).
+   Prinzip. Anders als 1./2. gibt es dafür keinen Codepfad, keinen Test,
+   keinen BEFUND-Präzedenzfall — nur die Vermutung, dass eine dritte,
+   symmetrische Quelle existieren könnte. Bevor das zu einem Prinzip wird,
+   braucht es einen echten Anker: entweder ein konkretes Beispiel, wo
+   Village tatsächlich eine neue eigene Fähigkeit entwickelt hat, oder die
+   Erkenntnis, dass es nur ein Nebenprodukt von 1./2. ist, keine eigene
+   Quelle.
 
 ## Autoritätsgrenze (unverändert aus SPEC.md §A.5)
 
