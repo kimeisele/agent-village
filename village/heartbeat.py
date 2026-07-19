@@ -12,9 +12,10 @@ import os
 import re
 import time
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
-from village.contracts import ContractState, VillageContract
+from village.contracts import Budget, ContractState, SuccessCriterion, VillageContract
 from village.village_core import (
     CanonicalIngressEvent,
     STATUS_ACCEPTED,
@@ -441,22 +442,65 @@ def _save_contract(contract: VillageContract) -> None:
     _save(CONTRACTS, store)
 
 
+def _parse_contract_terms(terms: dict) -> tuple[list[str], Budget, "datetime | None", list[SuccessCriterion]]:
+    """Parse a bounty's optional `contract_terms` field into the existing
+    village/contracts.py types -- no second schema, no new validation.
+    `Budget`/`SuccessCriterion` validate themselves at construction
+    (raise ValueError on e.g. a negative budget or an out-of-range
+    weight); a malformed deadline string raises ValueError via
+    `datetime.fromisoformat()`. Every sub-field of `contract_terms` is
+    optional. Raises on any invalid input -- the caller MUST call this
+    BEFORE mutating any bounty/contract state (docs/SPEC.md §C.3.1
+    atomicity requirement: a rejected claim must never leave a partial
+    state behind)."""
+    allowed_resources = list(terms.get("allowed_resources", []))
+    budget = Budget.from_dict(terms["budget"]) if terms.get("budget") else Budget()
+    deadline_raw = terms.get("deadline")
+    deadline = datetime.fromisoformat(deadline_raw) if deadline_raw else None
+    success_criteria = [SuccessCriterion.from_dict(c) for c in terms.get("success_criteria", [])]
+    return allowed_resources, budget, deadline, success_criteria
+
+
 def bounty_claim(bid: str, agent: str) -> dict | None:
     board = _load(BOUNTIES)
     for b in board.get("bounties", []):
         if b["id"] == bid and b["status"] == "open":
+            allowed_resources: list[str] = []
+            budget = Budget()
+            deadline = None
+            success_criteria: list[SuccessCriterion] = []
+
+            terms = b.get("contract_terms")
+            if terms:
+                # Construct BEFORE any mutation. A malformed
+                # contract_terms rejects the claim atomically -- same
+                # return semantics as "bid not found" (None), no bounty
+                # state change, no contracts.json write.
+                try:
+                    allowed_resources, budget, deadline, success_criteria = _parse_contract_terms(terms)
+                except (ValueError, TypeError) as e:
+                    print(f"  [contracts] {bid} claim rejected: invalid contract_terms ({e})")
+                    return None
+
             b["status"] = "claimed"
             b["claimed_by"] = agent
             b["claimed_at"] = time.time()
             _save(BOUNTIES, board)
 
             # Governance layer (docs/SPEC.md §C.3.1): create-or-load the
-            # bounty's VillageContract, activate it. Budget/deadline stay
-            # unconstrained (None) -- no ingress path supplies that data
-            # yet (docs/research/VILLAGE_CONTRACTS_01.md).
+            # bounty's VillageContract, activate it. Without
+            # contract_terms, budget/deadline/success_criteria stay
+            # unconstrained/empty exactly as before (docs/research/
+            # VILLAGE_CONTRACTS_01.md) -- this path is unchanged.
             contract_id = _contract_id_for(bid)
             contract = _load_contract(contract_id) or VillageContract(
-                contract_id=contract_id, title=b["title"], description=b["description"]
+                contract_id=contract_id,
+                title=b["title"],
+                description=b["description"],
+                allowed_resources=allowed_resources,
+                budget=budget,
+                deadline=deadline,
+                success_criteria=success_criteria,
             )
             if contract.state == ContractState.DRAFTED:
                 contract.activate()
@@ -474,19 +518,33 @@ def bounty_complete(bid: str) -> dict | None:
             b["completed_at"] = time.time()
             _save(BOUNTIES, board)
 
-            # Governance layer (docs/SPEC.md §C.3.1). No success_criteria
-            # are set today, so fulfill() succeeds trivially -- mirrors
-            # the existing bounty semantics ("someone says it's done")
-            # exactly, adds no new check. A missing contract (e.g. a
-            # bounty claimed before this wiring existed) is skipped
-            # cleanly, not a crash -- see docs/BEFUND.md.
+            # Governance layer (docs/SPEC.md §C.3.1). A missing contract
+            # (e.g. a bounty claimed before this wiring existed) is
+            # skipped cleanly, not a crash -- see docs/BEFUND.md.
             contract_id = _contract_id_for(bid)
             contract = _load_contract(contract_id)
             if contract is None:
                 print(f"  [contracts] no contract for {bid} (pre-existing claim?) — skipping")
             elif contract.state == ContractState.ACTIVE:
-                contract.fulfill()
-                _save_contract(contract)
+                unmet_required = [
+                    c.name for c in contract.success_criteria if c.required and c.met is not True
+                ]
+                if unmet_required:
+                    # No success-criteria evaluator exists (SPEC.md §A.5:
+                    # no LLM/automated judgment gets write authority) --
+                    # do NOT call fulfill() (would raise) and do NOT
+                    # pretend the criteria were checked. The bounty
+                    # itself still moves to "done" above, unchanged
+                    # bounty_complete() behavior from PR #11 -- only the
+                    # contract's own state is affected here.
+                    print(
+                        f"  [contracts] {bid} has unverified required success criteria "
+                        f"{unmet_required} — not automatically verifiable, no result payload "
+                        f"to check against. Contract stays ACTIVE, not fulfilled."
+                    )
+                else:
+                    contract.fulfill()
+                    _save_contract(contract)
 
             return b
     return None
