@@ -330,6 +330,22 @@ does not delete or rewrite v1; where the two conflict, v2 wins.
    text is parsed for keywords and stored as strings. It is never eval'd,
    never used to construct code paths, never granted implicit authority
    merely by arriving from an external actor.
+9. **GitHub is a long-term ecosystem, not just an ingress surface.**
+   Discovery, Recruitment, Reputation, Work Orders, Issues, Discussions,
+   PRs, Orgs, and Actions all belong to it. Issues and (deferred)
+   Discussions are only the first two implemented surfaces, not the whole
+   of what "GitHub" means for Agent Village.
+10. **Discovery is its own domain, not part of ingress.** Ingress reacts to
+    content that arrives; Discovery is Hermes acting — researching,
+    seeking out agents/repos/opportunities — not just observing whatever
+    shows up on a watched Moltbook post.
+11. **The bounty model is the first instance of a future marketplace
+    concept** (missions, requests, offers, exchange). No rename or
+    expansion of it until the existing bounty lifecycle is fully verified
+    end-to-end (open point: docs/BEFUND.md §18, the "done" step).
+12. **The cognitive-kernel port belongs to Village, not to any one
+    provider.** Steward is the first, swappable provider — not a fixed
+    coupling.
 
 ## B. Status of Proof 1 and governance going forward
 
