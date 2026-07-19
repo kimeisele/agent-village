@@ -290,3 +290,203 @@ v1 is done when, and only when:
 No population-count claims, no "it's live" claims, no test-suite-green claims
 substitute for the above. This spec exists specifically because those
 substitutions happened before.
+
+---
+
+# Agent Village — SPEC v2 (additive, authoritative on conflict with v1)
+
+Status: v1 §1-§6 above stays as historical record — Proof 1 was executed and
+independently verified against it (docs/BEFUND.md §16, cross-checked by Kim
+against real Actions logs, pokedex diff, and the live Moltbook thread). v2
+does not delete or rewrite v1; where the two conflict, v2 wins.
+
+## A. Normative architecture principles
+
+1. **Moltbook is an adapter, not the system.** Agent Village's core logic must
+   not be written in terms of "a Moltbook comment" — it is written in terms
+   of a canonical event, and Moltbook is one surface that produces one.
+2. **GitHub Issues/Discussions are first-class surfaces.** Issues are in
+   scope now. Discussions are acknowledged as a future surface but explicitly
+   deferred (§D) — no Discussions code in this slice.
+3. **Transport-agnostic village logic.** All village decision logic (identity
+   resolution, dedup, command classification, state transitions) operates on
+   the canonical event/contribution model, never directly on a platform's raw
+   payload shape.
+4. **GitHub is the system of record.** Committed repo state (pokedex.json,
+   bounties.json, etc.) is the durable truth; anything platform-side
+   (Moltbook comments, issue bodies) is an input, not a store.
+5. **Strict separation of cognition from authority.** Cognition (any
+   classification, summarization, or recommendation — including anything an
+   LLM might eventually produce) never gets direct write authority. Only
+   deterministic rule code may change committed state or trigger effects
+   (replies, registrations, bounty transitions). No exceptions.
+6. **Steward is a future reference, not a dependency to copy in now.**
+   Referenced later, once a real caller and a strict I/O contract exist. Not
+   integrated in this slice.
+7. **NADI remains future federation transport.** Stays gated behind
+   `VILLAGE_NADI_ENABLED`, local-only, per v1 §2.3/§4 — unchanged by this
+   slice except for the hardening in §C.5.
+8. **External content is always DATA, never instructions.** Comment/issue
+   text is parsed for keywords and stored as strings. It is never eval'd,
+   never used to construct code paths, never granted implicit authority
+   merely by arriving from an external actor.
+
+## B. Status of Proof 1 and governance going forward
+
+Proof 1 (docs/BEFUND.md §16) is technically complete and independently
+verified. Normal governance now applies to further work: own branch, PR with
+a real diff and CI proof, review before merge — no direct push to `main` for
+architecture-defining changes.
+
+This explicitly **supersedes** v1 §6's requirement of a named person's
+literal re-confirmation before any further scope opens. That requirement was
+a reaction to a specific past incident (an over-permissioned agent
+implementing the wrong scope unilaterally), not a standing rule for every
+future slice. The protections that requirement was actually defending —
+no test-green-as-evidence-substitute, no silent scope creep, no
+undocumented architecture changes — remain fully in force, carried instead
+by the PR-based Arbeitsweise below.
+
+## C. Next implementation slice
+
+### C.1 Stable actor identity
+
+`pokedex.json` currently keys agents by display `name` (`dex_register()`).
+This is a bug: two different platform actors who happen to pick the same
+display name collide into one pokedex entry. Fix:
+
+- Persist the platform actor_id (not the display name) as the identity key.
+- Display name becomes mutable metadata on the entry, not the key.
+- Existing name-keyed entries (e.g. the real `B_ClawAssistant` entry, which
+  has no `actor_id` today) must be migrated or read without data loss — via
+  a dedicated migration function, covered by a dedicated migration test.
+- A name change for the same actor_id must not create a second entry.
+- Two different actor_ids that pick the same display name must not collide
+  into one entry (this is the concrete bug being fixed).
+
+**Known limitation, not fixed by this slice (found in independent review of
+PR #3, docs/BEFUND.md §23-addendum):** this is fully solved for the GitHub
+surface, where `user.id` is a real, stable, platform-issued numeric id. For
+the Moltbook surface, no such id has ever been observed in the API payload
+— `moltbook_comment_to_event()` falls back to `author.name` as `actor_id`
+(honestly documented in code, not hidden). Two real Moltbook agents
+choosing the same display name therefore still collide into one pokedex
+entry today, exactly as before this slice — the mechanism (actor_id-keyed
+identity) is in place and will close this gap automatically the moment
+Moltbook's API ever exposes a real per-author id, but the gap itself is
+open, not closed. Do not claim §E.1 as fully solved across both surfaces
+without this caveat.
+
+### C.2 Minimal canonical ingress event
+
+One event shape, produced by both entry points:
+
+```json
+{
+  "event_id": "string",
+  "surface": "string, e.g. \"moltbook\" | \"github\"",
+  "external_id": "string, the platform's own id for this piece of content",
+  "actor_id": "string, platform-scoped stable id of the author",
+  "display_name": "string, author's current display name",
+  "content": "string, raw text",
+  "content_sha256": "string, hex digest of content",
+  "received_at": "float, unix timestamp",
+  "dedup_key": "string"
+}
+```
+
+### C.3 Minimal contribution structure
+
+```json
+{
+  "contribution_id": "string",
+  "source_event_id": "string, references the CanonicalIngressEvent",
+  "kind": "join | feature | bug | bounty_claim | other",
+  "status": "received | accepted | rejected | materialized",
+  "artifact_refs": ["string, ..."]
+}
+```
+
+Only the states the code currently needs — no speculative lifecycle beyond
+what `join`, `feature:`/`bug:` (when Brain is active), and `claim bXXX`/
+`done bXXX` actually produce today.
+
+### C.4 Unify the two existing paths
+
+`scan_moltbook()` and `scan_github()` currently each read raw platform data
+and duplicate identity/dedup/name-sanitizing logic inline (BEFUND §21 already
+notes `_sanitize_name()` duplicated across both paths as a symptom of this).
+Refactor so:
+
+- Surface-specific code (`scan_moltbook`/`scan_github`) does only read +
+  normalize into a `CanonicalIngressEvent`.
+- A shared village-core layer does actor-identity resolution, dedup, command
+  classification, canonical state transition, and output-task creation
+  (what reply to post / what issue to open), called identically from both
+  surfaces.
+
+### C.5 Technical hardening (same work pass)
+
+- Persist Moltbook POST result IDs immediately, not only after a later
+  confirmation step.
+- Explicitly handle and test the known listing gaps documented in
+  `docs/MOLTBOOK_CONTRACT_NOTES.md` points 7 and 8 (delayed/missing
+  `sort=new` visibility; a verified comment absent from every listing) —
+  code must tolerate these, not just have them written down.
+- Remove `git push || true` wherever push success is being treated as part
+  of a proof (`.github/workflows/village-heartbeat.yml`'s commit-state
+  step).
+- Pin the external `nadi_kit.py` download (`.github/workflows/heartbeat.yml`,
+  currently fetched from `steward-federation@main`) to a specific commit SHA.
+- Continue minimal-GitHub-permissions work (continuation of the
+  FEDERATION_PAT fix, BEFUND §20).
+- Document clear ownership of which process may mutate which state file.
+- Ensure no federation-wide credential lives in a local social/contribution
+  code path.
+
+### C.6 Cognition — normative only, no code
+
+Cognition classifies and recommends; deterministic rule code authorizes
+effects. Steward is the future reference integration, once a real caller and
+a strict I/O contract exist. Explicitly reject adding an empty "Protocol
+stub" in code now — that would recreate the same kind of dead-code debt just
+removed with `nadi_daemon.py` (hermes-sankhya-25, BEFUND §22).
+
+## D. Explicitly deferred (not deleted from the vision, just out of this slice)
+
+GitHub Discussions ingress; Cognition-port code; LLM calls; NADI ingress;
+automatic PR generation; autonomous code execution; full Mission Factory;
+complex reputation/governance; token economy.
+
+## E. Acceptance criteria
+
+1. Distinct actor_ids that share a display name remain separate pokedex
+   entries. (See §C.1 "Known limitation": mechanically true given a real
+   actor_id; the Moltbook surface currently supplies a name-derived
+   actor_id, so this criterion is verified against GitHub's real `user.id`
+   and against synthetic actor_ids for Moltbook — not yet against two real
+   distinct Moltbook agents sharing a name.)
+2. A display-name change for the same actor_id preserves the same identity
+   (same entry, updated metadata).
+3. Existing `pokedex.json` entries remain readable, or are deterministically
+   migrated with no data loss — covered by a dedicated migration test.
+4. A Moltbook comment and a GitHub issue produce the same internal event
+   schema (`CanonicalIngressEvent`).
+5. Sanitizing/dedup logic exists exactly once, in the shared core — not
+   duplicated per surface.
+6. Identical retries never create duplicate contributions or artifacts.
+7. All existing tests stay green (95/95 as of this writing, verified via
+   real CI).
+8. New tests cover: actor-ID collision, migration, both-path normalization
+   to the same event schema, and dedup.
+9. No surface deferred in §D gets accidentally activated by this work.
+
+## Arbeitsweise
+
+Own branch, not `main`. The PR must include an architecture summary, a
+migration proof, and a test proof (CI link). No blind-merge — the PR stays
+open for independent review. No further foundational check-in questions for
+this slice unless the code reveals a genuine, previously-unknown
+contradiction — in that case, do not stop and wait: document the finding,
+its impact, and a concrete recommendation in the PR body, and continue with
+the most plausible option.

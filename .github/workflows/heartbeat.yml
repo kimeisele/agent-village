@@ -45,9 +45,17 @@ jobs:
         env:
           NODE_PRIVATE_KEY: ${{ secrets.NODE_PRIVATE_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Pinned to a specific commit (docs/SPEC.md §C.5), not `@main` —
+        # an unpinned external download meant this workflow's behavior
+        # could change underneath it without any diff in this repo. SHA
+        # is the latest commit touching nadi_kit.py in steward-federation
+        # as of this slice (verified via `gh api
+        # repos/kimeisele/steward-federation/commits?path=nadi_kit.py`).
+        # Bump deliberately, not silently, when a new nadi_kit.py version
+        # is needed.
         run: |
           curl -sL -H "Authorization: token ${GH_TOKEN}" \
-            "https://raw.githubusercontent.com/kimeisele/steward-federation/main/nadi_kit.py" \
+            "https://raw.githubusercontent.com/kimeisele/steward-federation/e1321e575b8b56ab624e4e5c2edd735213c895f5/nadi_kit.py" \
             -o nadi_kit.py
           python3 -c "import sys; sys.path.insert(0, '.'); import nadi_kit; print('nadi_kit loaded')"
 
@@ -63,9 +71,14 @@ jobs:
 
       - name: Commit federation state
         if: always()
+        # `git push || true` removed (docs/SPEC.md §C.5): a silently
+        # swallowed push failure here means committed-but-unpushed state,
+        # which is indistinguishable from a real push in the job log —
+        # exactly the kind of "looks green, isn't" gap this slice hardens
+        # against. A push failure should fail the job.
         run: |
           git config user.name "federation-bot"
           git config user.email "bot@federation"
           git add data/federation/ || true
           git diff --cached --quiet || git commit -m "chore: heartbeat state"
-          git push || true
+          git push

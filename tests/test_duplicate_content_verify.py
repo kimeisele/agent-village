@@ -15,6 +15,7 @@ def test_already_existed_failed_comment_is_not_verified(monkeypatch, tmp_path):
     success=true, already_existed=true, and the OLD comment with
     verification_status="failed" — must be treated as verified=False."""
     monkeypatch.setattr(hb, "CHALLENGE_STATE", tmp_path / "challenge_failures.json")
+    monkeypatch.setattr(hb, "REPLY_COMMENT_IDS", tmp_path / "reply_comment_ids.json")
     monkeypatch.setattr(
         hb, "_mb",
         lambda path, method="GET", body=None: {
@@ -39,6 +40,7 @@ def test_already_existed_pending_comment_is_not_verified(monkeypatch, tmp_path):
     """Same duplicate-detection path, but the stale comment happens to
     still be "pending" rather than "failed" -- still not verified."""
     monkeypatch.setattr(hb, "CHALLENGE_STATE", tmp_path / "challenge_failures.json")
+    monkeypatch.setattr(hb, "REPLY_COMMENT_IDS", tmp_path / "reply_comment_ids.json")
     monkeypatch.setattr(
         hb, "_mb",
         lambda path, method="GET", body=None: {
@@ -60,6 +62,7 @@ def test_retry_suffix_makes_consecutive_registration_attempts_differ(monkeypatch
     monkeypatch.setattr(hb, "PENDING_MB", tmp_path / "pending_confirmations.json")
     monkeypatch.setattr(hb, "POKEDEX", tmp_path / "pokedex.json")
     monkeypatch.setattr(hb, "BOUNTIES", tmp_path / "bounties.json")
+    monkeypatch.setattr(hb, "CONTRIBUTIONS", tmp_path / "contributions.json")
     monkeypatch.setattr(hb, "MB", "fake-key")
     monkeypatch.setattr(hb, "REG_POST", "post123")
     hb._save(hb.BOUNTIES, {"bounties": []})

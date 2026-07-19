@@ -1228,3 +1228,128 @@ Setup-Einstiegspunkt des Repos und listet `nadi_send.py` im Skript-Inventar,
 beide sind also trotz vermutlich desselben kaputten `peer.json`-Pfads kein
 Aufräumfall, sondern eine offene Architekturfrage (wo lebt `peer.json`
 künftig für dieses Repo?) — nicht hier entschieden.
+
+---
+
+## §23 — SPEC.md v2, Slice `slice/canonical-ingress` (2026-07-19)
+
+Umsetzung von SPEC.md §C.1–§C.5 auf Branch `slice/canonical-ingress`
+(nicht `main`), PR offen zur Prüfung. Alle Punkte unten sind gegen den
+echten Diff und einen echten CI-Lauf nachprüfbar, keine reine Behauptung.
+
+**C.1 — Actor-ID-Identität:** `dex_register(name, actor_id=None)` schlüsselt
+jetzt über `actor_id`, nicht mehr über den Anzeigenamen
+(`village/heartbeat.py`). Migration (`village_core.migrate_pokedex()`) läuft
+transparent bei jedem Laden von `pokedex.json` — bestätigt gegen die exakte
+reale Struktur des aktuellen `B_ClawAssistant`-Eintrags
+(`tests/test_actor_identity.py::test_migrate_pokedex_adds_legacy_actor_id_without_dropping_fields`).
+Entscheidung dokumentiert: Legacy-Einträge (kein `actor_id` vorhanden)
+bekommen einen deterministischen Platzhalter `legacy:<name>` — bewusst
+*nicht* zufällig, damit die Migration idempotent und in einem Diff
+nachvollziehbar bleibt (`village_core.legacy_actor_id()`).
+
+**C.2 — Kanonisches Ingress-Event:** `village/village_core.py::
+CanonicalIngressEvent` + `moltbook_comment_to_event()` /
+`github_issue_to_event()`, exakt das in SPEC.md §C.2 verlangte Feldset,
+für beide Oberflächen identisch (`tests/test_canonical_events.py::
+test_both_surfaces_produce_the_same_event_field_set`).
+
+**C.3 — Contribution:** `village_core.Contribution` +
+`make_contribution()`, `kind` beschränkt auf `join | feature | bug |
+bounty_claim | other` — nur was der Code aktuell tatsächlich erzeugt.
+`contribution_id` ist deterministisch (`dedup_key:kind`), kein Zufallswert.
+
+**C.4 — Vereinheitlichung:** `scan_moltbook()`/`scan_github()` normalisieren
+jetzt nur noch in ein `CanonicalIngressEvent` und rufen den gemeinsamen Kern
+(`village_core.sanitize_name/kw_match/classify_command`,
+`heartbeat._record_contribution()`) auf. `_sanitize_name`/`_kw_match` in
+`heartbeat.py` sind jetzt Aliase auf die einzige Implementierung in
+`village_core.py`, keine zweite Kopie mehr (BEFUND §21 benannte die
+Duplikation als Symptom) — mechanisch geprüft via
+`tests/test_canonical_events.py::test_heartbeat_sanitize_name_is_the_core_implementation`
+(prüft Objektidentität, nicht nur gleiches Verhalten).
+
+**C.5 — Härtung:**
+- `_post_comment_verified()` persistiert die zurückgegebene Moltbook-
+  Comment-ID sofort nach dem POST (`_record_comment_id()`,
+  `data/village/reply_comment_ids.json`), unabhängig vom Verify-Ausgang.
+- `_fetch_comments_resilient()` fragt `sort=new` UND `sort=old` ab und
+  merged nach ID — schließt die in
+  `docs/MOLTBOOK_CONTRACT_NOTES.md` Punkt 7 dokumentierte Lücke (verzögert
+  sichtbare Kommentare unter `sort=new`) tatsächlich im Code, nicht nur in
+  der Doku. Punkt 8 (Kommentar in KEINER Auflistung sichtbar) bleibt ungelöst
+  — dafür gibt es serverseitig nichts abzufragen; unverändert dokumentiert.
+- `.github/workflows/heartbeat.yml`: `git push || true` → `git push` (ein
+  Push-Fehler soll den Job jetzt sichtbar rot machen statt still zu
+  verschwinden).
+- `nadi_kit.py`-Download in `heartbeat.yml` von `@main` auf Commit
+  `e1321e575b8b56ab624e4e5c2edd735213c895f5` gepinnt (aktuellster Commit auf
+  `nadi_kit.py` in `steward-federation`, per `gh api
+  repos/kimeisele/steward-federation/commits?path=nadi_kit.py` verifiziert).
+- `docs/STATE_OWNERSHIP.md` neu: eine Zeile pro Statedatei, welcher Workflow
+  sie schreibt. Bestätigt: `village-heartbeat.yml` und `heartbeat.yml`
+  (NADI) teilen sich keine Datei; `NODE_PRIVATE_KEY` ist im Registrierungs-/
+  Contribution-Pfad (`heartbeat.py`/`village_core.py`) nirgends referenziert.
+
+**Tests:** 109/109 grün (95 bestehend + 14 neu für §E.1/§E.2/§E.3/§E.4/§E.5/
+§E.6 in `tests/test_actor_identity.py`, `tests/test_canonical_events.py`,
+`tests/test_contribution_dedup.py`). Zwei bestehende Tests mussten an
+absichtlich geänderte, dokumentierte Verhaltensänderungen angepasst werden
+(nicht an einen Bug): `_post_comment_verified()` gibt jetzt immer
+`comment_id` zurück (C.5), `_fetch_comments_resilient()` ruft `_mb()` zweimal
+statt einmal auf (sort=new + sort=old). CI-Lauf: siehe PR.
+
+**Während der Arbeit gefunden, kein Stopp nötig:** beim allerersten
+(ungefixten) Testlauf haben mehrere Tests, die `scan_moltbook()` real
+durchlaufen ließen, ohne `CONTRIBUTIONS`/`REPLY_COMMENT_IDS` zu mocken,
+tatsächlich in die echten Repo-Dateien
+`data/village/contributions.json`/`reply_comment_ids.json` geschrieben —
+gefunden über `git status --short` nach dem ersten Lauf, sofort per
+Monkeypatch in allen betroffenen Testdateien behoben, die geschriebenen
+Dateien gelöscht (waren reine Testartefakte, keine echten Daten), erneuter
+Lauf bestätigt keine weiteren Schreibzugriffe außerhalb `tmp_path`. Kein
+echter Datenverlust, aber genau die Klasse Fehler, vor der die frühere
+`test_name_sanitizing.py`-Panne (siehe früherer Abschnitt) schon einmal
+gewarnt hat — Lehre: jede neue State-Datei braucht ab dem Moment ihrer
+Einführung sofort einen Platz in jedem `_setup()`, das `scan_moltbook()`/
+`scan_github()` real aufruft.
+
+Keine der in SPEC.md §D genannten zurückgestellten Flächen wurde aktiviert
+(grep bestätigt: keine neuen `VILLAGE_*_ENABLED`-Defaults, keine
+Discussions-, LLM- oder NADI-Ingress-Code-Änderung).
+
+### §23-Nachtrag — zwei Funde aus Kims unabhängigem Review von PR #3 (2026-07-19)
+
+Kim hat den Diff und CI-Lauf selbst nachvollzogen (nicht nur den obigen
+Bericht übernommen) und zwei reale Lücken gefunden, die weder im
+ursprünglichen Bericht noch in den 14 neuen Tests auftauchten:
+
+**Fund 1 (behoben):** Der Retry-Pass in `scan_moltbook()` (vier Zweige:
+registration, bounty_claim, bounty_reject, bounty_done) rief bei
+erfolgreicher Bestätigung nie `_record_contribution(...,
+STATUS_MATERIALIZED)` auf — nur der Erstversuchs-Pfad tat das. Ein
+Contribution-Datensatz, dessen Bestätigung erst im Retry gelang (der in
+BEFUND §15 dokumentierte, real beobachtete Normalfall bei Moltbooks
+Content-Dedup), blieb dadurch dauerhaft auf `"received"` stehen, obwohl die
+Aktion vollständig abgeschlossen war. Fix: neue Hilfsfunktion
+`heartbeat._retry_event()` rekonstruiert ein `CanonicalIngressEvent` aus den
+im `pending`-Dict vorhandenen Daten (cid, actor_id/sender, bid); alle vier
+Retry-Zweige rufen jetzt bei Erfolg `_record_contribution(...,
+STATUS_MATERIALIZED/STATUS_REJECTED)` auf, exakt wie der Erstversuchs-Pfad.
+Neue Tests: `tests/test_contribution_dedup.py::
+test_registration_confirmed_on_retry_reaches_materialized`,
+`test_bounty_claim_confirmed_on_retry_reaches_materialized`.
+
+**Fund 2 (als bekannte Einschränkung dokumentiert, nicht code-seitig
+lösbar):** `moltbook_comment_to_event()` hat für `actor_id` keine echte
+Plattform-ID zur Verfügung (Moltbooks API liefert bisher keine) und fällt
+ehrlich auf `author.name` zurück. §E.1 ("unterschiedliche Actor-IDs mit
+gleichem Namen kollidieren nicht") ist damit für GitHub (echte `user.id`)
+tatsächlich gelöst, für Moltbook aber nur mechanisch vorbereitet, nicht
+inhaltlich gelöst — zwei echte Moltbook-Agenten mit gleichem Anzeigenamen
+würden weiterhin kollidieren. In `docs/SPEC.md` §C.1 und §E.1 explizit als
+offene, für diesen Slice akzeptierte Einschränkung ergänzt, statt implizit
+als erledigt geführt zu werden.
+
+Alle 111 Tests grün (109 vorher + 2 neu für Fund 1), keine Schreibzugriffe
+auf echte Repo-Daten (`git status --short data/` leer nach dem Lauf).

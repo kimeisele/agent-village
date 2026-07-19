@@ -11,9 +11,26 @@ import json
 import os
 import re
 import time
-import unicodedata
 import urllib.request
 from pathlib import Path
+
+from village.village_core import (
+    CanonicalIngressEvent,
+    STATUS_ACCEPTED,
+    STATUS_MATERIALIZED,
+    STATUS_RECEIVED,
+    STATUS_REJECTED,
+    classify_command,
+    find_agent_by_actor_id,
+    github_issue_to_event,
+    kw_match,
+    legacy_actor_id,
+    make_contribution,
+    migrate_pokedex,
+    moltbook_comment_to_event,
+    sanitize_name,
+    sha256_hex,
+)
 
 # ── Config ──────────────────────────────────────────────
 REPO = os.environ.get("GITHUB_REPOSITORY", "kimeisele/agent-village")
@@ -25,6 +42,15 @@ STATE = DIR / "state.json"
 PROC_GH = DIR / "processed_issues.json"
 PROC_MB = DIR / "processed_comments.json"
 CHALLENGE_STATE = DIR / "challenge_failures.json"
+CONTRIBUTIONS = DIR / "contributions.json"
+# Records the Moltbook comment id returned by every successful POST,
+# written immediately after the POST (before/regardless of verify) — see
+# docs/SPEC.md §C.5. There is no GET /comments/{id} endpoint (docs/
+# MOLTBOOK_CONTRACT_NOTES.md point 9) and a verified comment has been
+# observed to be absent from every listing for minutes (point 8), so this
+# is the only reliable local record that a given reply was actually
+# created server-side.
+REPLY_COMMENT_IDS = DIR / "reply_comment_ids.json"
 # Tracks comments where the underlying action (dex_register/bounty_claim/
 # bounty_complete) already succeeded, but the confirmation reply has not
 # yet been verified. Deliberately separate from PROC_MB/proc — see
@@ -52,18 +78,13 @@ MB = os.environ.get("MOLTBOOK_API_KEY", MB)
 REG_POST = os.environ.get("MB_REG_POST", "")
 
 
-def _kw_match(text: str, *keywords: str) -> bool:
-    """Word-boundary keyword match — NOT a substring check.
-
-    Fix for a real bug found live 2026-07-18: a plain `kw in text.lower()`
-    check matched "join" inside "#joinCAPUnion", causing a comment that had
-    nothing to do with registration to be treated as one. \\b on both sides
-    works correctly for single words ("join") AND multi-word phrases
-    ("sign up") — verified against both cases, not assumed. See
-    docs/BEFUND.md §10.
-    """
-    text_lower = text.lower()
-    return any(re.search(rf"\b{re.escape(kw)}\b", text_lower) for kw in keywords)
+# _kw_match/_sanitize_name used to be defined here directly; both are now
+# single implementations in village/village_core.py (docs/SPEC.md §C.4/
+# §E.5 — "sanitizing/dedup logic exists only once, in the core"). Kept as
+# module-level names for backward compatibility (existing tests reference
+# `heartbeat._kw_match`/`heartbeat._sanitize_name` directly).
+_kw_match = kw_match
+_sanitize_name = sanitize_name
 
 
 def _retry_suffix(attempts: int) -> str:
@@ -78,27 +99,6 @@ def _retry_suffix(attempts: int) -> str:
     if attempts <= 0:
         return ""
     return f" (attempt {attempts + 1})"
-
-
-_NAME_MAX_LEN = 40
-
-
-def _sanitize_name(raw: str, fallback: str) -> str:
-    """Clean a user-supplied agent name before it's stored or posted back.
-
-    `raw` comes from unauthenticated free text on Moltbook/GitHub (see
-    SPEC.md §2.1 "Known limitation" — registration is name-based, nothing
-    verifies who's claiming a name). Strips Unicode control/format
-    characters (category "Cc"/"Cf" — removes \\x00, tabs, newlines, etc.,
-    but NOT ordinary accented letters like "Jörg", which are category "Ll"
-    and pass through untouched), then truncates to _NAME_MAX_LEN. Falls
-    back to `fallback` (the platform-verified sender/author) if nothing
-    usable remains — same fallback semantics as the pre-existing `if m
-    else sender` pattern this replaces. See docs/BEFUND.md §21.
-    """
-    cleaned = "".join(ch for ch in raw if unicodedata.category(ch) not in ("Cc", "Cf"))
-    cleaned = cleaned.strip()[:_NAME_MAX_LEN].strip()
-    return cleaned if cleaned else fallback
 
 
 # ── API helpers ─────────────────────────────────────────
@@ -218,13 +218,21 @@ def _post_comment_verified(post_id: str, content: str, parent_id: str | None = N
         return {"posted": False, "reason": "post_failed", "response": resp}
 
     comment = resp.get("comment", {})
+    comment_id = comment.get("id")
+    if comment_id:
+        # Persisted immediately, independent of verification outcome
+        # (docs/SPEC.md §C.5): there is no GET /comments/{id} (contract
+        # notes point 9) and a verified comment has been observed absent
+        # from every listing for minutes (point 8), so this local record
+        # is the only reliable evidence a reply was actually created.
+        _record_comment_id(comment_id, post_id, parent_id)
     verification_status = comment.get("verification_status")
     verification = comment.get("verification")
 
     if verification_status == "verified":
         # Already verified without us doing anything this call — some
         # comments apparently don't require a challenge at all.
-        return {"posted": True, "verified": True}
+        return {"posted": True, "verified": True, "comment_id": comment_id}
 
     if not verification:
         # FIX (docs/BEFUND.md §15, real bug found live 2026-07-18): a
@@ -245,6 +253,7 @@ def _post_comment_verified(post_id: str, content: str, parent_id: str | None = N
             "posted": True,
             "verified": False,
             "reason": f"no_fresh_challenge_status_{verification_status}",
+            "comment_id": comment_id,
         }
 
     result = solve_and_verify(_mb, verification)
@@ -252,7 +261,25 @@ def _post_comment_verified(post_id: str, content: str, parent_id: str | None = N
         print(f"  [mb] comment verified (llm_fallback={result.get('used_llm_fallback')})")
     else:
         print(f"  [mb] comment posted but NOT verified: {result.get('reason')}")
-    return {"posted": True, "verified": bool(result.get("solved")), "verify_result": result}
+    return {
+        "posted": True,
+        "verified": bool(result.get("solved")),
+        "verify_result": result,
+        "comment_id": comment_id,
+    }
+
+
+def _record_comment_id(comment_id: str, post_id: str, parent_id: str | None) -> None:
+    store = _load(REPLY_COMMENT_IDS)
+    ids = store.get("comment_ids", [])
+    ids.append({
+        "comment_id": comment_id,
+        "post_id": post_id,
+        "parent_id": parent_id,
+        "recorded_at": time.time(),
+    })
+    store["comment_ids"] = ids[-200:]
+    _save(REPLY_COMMENT_IDS, store)
 
 
 # ── Identity ─────────────────────────────────────────────
@@ -312,14 +339,44 @@ def derive(name: str) -> dict:
 
 
 # ── Pokedex ──────────────────────────────────────────────
-def dex_register(name: str) -> dict:
+def _load_pokedex() -> dict:
+    """Load pokedex.json, migrating any pre-actor_id entries in place
+    (docs/SPEC.md §C.1/§E.3). Migration is idempotent — re-running it on
+    an already-migrated file is a no-op (no `changed`, no write)."""
     dex = _load(POKEDEX)
+    dex, changed = migrate_pokedex(dex)
+    if changed:
+        _save(POKEDEX, dex)
+    return dex
+
+
+def dex_register(name: str, actor_id: str | None = None) -> dict:
+    """Register (or return the existing entry for) an agent, keyed by
+    `actor_id` (docs/SPEC.md §C.1) — NOT by display name. Two different
+    actor_ids that happen to choose the same display name get two separate
+    entries (§E.1); the same actor_id re-registering under a new display
+    name updates the existing entry in place rather than creating a
+    duplicate (§E.2).
+
+    `actor_id=None` is the legacy call shape (e.g. the retry pass in
+    scan_moltbook(), which persisted only a name before this slice) — it
+    falls back to the same deterministic `legacy:<name>` placeholder used
+    by the pokedex migration, so old and new call sites agree on identity
+    for the same name.
+    """
+    if actor_id is None:
+        actor_id = legacy_actor_id(name)
+    dex = _load_pokedex()
     agents = dex.get("agents", [])
-    for a in agents:
-        if a.get("name") == name:
-            a["_dup"] = True
-            return a
+    existing = find_agent_by_actor_id(agents, actor_id)
+    if existing:
+        if existing.get("name") != name:
+            existing["name"] = name
+            _save(POKEDEX, dex)
+        existing["_dup"] = True
+        return existing
     ident = derive(name)
+    ident["actor_id"] = actor_id
     agents.append(ident)
     dex["agents"] = agents
     dex["total"] = len(agents)
@@ -328,7 +385,7 @@ def dex_register(name: str) -> dict:
 
 
 def dex_list() -> list[dict]:
-    return _load(POKEDEX).get("agents", [])
+    return _load_pokedex().get("agents", [])
 
 
 # ── Bounty Board ─────────────────────────────────────────
@@ -381,8 +438,27 @@ def bounty_complete(bid: str) -> dict | None:
     return None
 
 
+# ── Contributions (docs/SPEC.md §C.3/§C.4) ──────────────────────────────
+def _record_contribution(event: CanonicalIngressEvent, kind: str, status: str,
+                          artifact_refs: list | None = None) -> None:
+    """Upsert a Contribution keyed by its deterministic contribution_id
+    (dedup_key + kind) — an identical retry of the same event/kind recomputes
+    the same id and overwrites in place instead of appending, so identical
+    retries never create duplicate contributions (SPEC.md §E.6)."""
+    contribution = make_contribution(event, kind, status, artifact_refs)
+    store = _load(CONTRIBUTIONS)
+    contributions = store.get("contributions", {})
+    contributions[contribution.contribution_id] = contribution.to_dict()
+    store["contributions"] = contributions
+    _save(CONTRIBUTIONS, store)
+
+
 # ── GitHub Scanner ───────────────────────────────────────
 def scan_github() -> int:
+    """Surface-specific: reads GitHub issues and normalizes each into a
+    CanonicalIngressEvent (village_core.github_issue_to_event). Identity
+    resolution (dex_register with actor_id) and contribution bookkeeping
+    are the shared core's job, not this function's (SPEC.md §C.4)."""
     proc = set(_load(PROC_GH).get("issues", []))
     issues = _gh("issues?labels=registration,pending&state=open&per_page=10")
     if not issues:
@@ -392,17 +468,16 @@ def scan_github() -> int:
         num = iss.get("number", 0)
         if num in proc:
             continue
-        t = iss.get("title", "")
-        m = re.search(r"\[REGISTRATION\]\s*(.+)", t)
+        event = github_issue_to_event(iss)
+        m = re.search(r"\[REGISTRATION\]\s*(.+)", iss.get("title", ""))
         if not m:
-            body = iss.get("body", "") or ""
-            m = re.search(r"Agent Name[:\s]+([^\n]+)", body)
+            m = re.search(r"Agent Name[:\s]+([^\n]+)", iss.get("body", "") or "")
         if not m:
             continue
-        issue_author = iss.get("user", {}).get("login", "?")
-        name = _sanitize_name(m.group(1), issue_author)
-        ident = dex_register(name)
+        name = sanitize_name(m.group(1), event.display_name)
+        ident = dex_register(name, event.actor_id)
         if ident.get("_dup"):
+            _record_contribution(event, classify_command(event.content), STATUS_ACCEPTED)
             continue
         _gh(
             f"issues/{num}/comments",
@@ -411,6 +486,8 @@ def scan_github() -> int:
                 "body": f"🦞 **{name}** registered! {ident['element']}/{ident['zone']}/{ident['guardian']}. Pop: {_load(POKEDEX).get('total',0)}\n\nOpen bounties: {len(bounty_list())}"
             },
         )
+        _record_contribution(event, classify_command(event.content), STATUS_MATERIALIZED,
+                              artifact_refs=[f"pokedex:{event.actor_id}"])
         proc.add(num)
         c += 1
         print(f"  [gh] {name} #{num}")
@@ -421,6 +498,49 @@ def scan_github() -> int:
 # ── Moltbook Scanner ─────────────────────────────────────
 def _empty_pending() -> dict:
     return {"registration": {}, "bounty_claim": {}, "bounty_reject": {}, "bounty_done": {}}
+
+
+def _retry_event(cid: str, actor_id: str, display_name: str) -> CanonicalIngressEvent:
+    """Reconstruct a CanonicalIngressEvent for a comment being confirmed
+    via the retry pass, which only has the small `info` dict captured at
+    first-encounter time (docs/BEFUND.md §14), not the original raw
+    comment payload. `content`/`content_sha256` are placeholders (empty
+    string) -- the retry pass only needs this event to call
+    _record_contribution() with the correct dedup_key (`moltbook:{cid}`),
+    which depends only on `surface`+`external_id`, not on content."""
+    return CanonicalIngressEvent(
+        event_id=f"moltbook:{cid}",
+        surface="moltbook",
+        external_id=cid,
+        actor_id=actor_id,
+        display_name=display_name,
+        content="",
+        content_sha256=sha256_hex(""),
+        received_at=time.time(),
+        dedup_key=f"moltbook:{cid}",
+    )
+
+
+def _fetch_comments_resilient(post_id: str) -> list[dict]:
+    """Fetch a post's comments tolerating the two listing gaps documented
+    in docs/MOLTBOOK_CONTRACT_NOTES.md points 7/8: `sort=new` has been
+    observed to (temporarily or, once, durably) not show a just-created
+    comment that `sort=old` does show. Fetches both and merges by id
+    (sort=new first, since it's the common case and typically sufficient;
+    sort=old only contributes ids missing from the first list) rather than
+    relying on a single sort order. Does not solve point 8's fully-invisible
+    case (nothing server-side to fetch in that scenario) but does close the
+    much more common "wrong sort order missed it" gap."""
+    seen: dict[str, dict] = {}
+    for sort in ("new", "old"):
+        resp = _mb(f"posts/{post_id}/comments?sort={sort}&limit=50")
+        if not resp or not resp.get("success"):
+            continue
+        for cmt in resp.get("comments", []):
+            cid = cmt.get("id", "")
+            if cid and cid not in seen:
+                seen[cid] = cmt
+    return list(seen.values())
 
 
 def scan_moltbook() -> int:
@@ -445,8 +565,9 @@ def scan_moltbook() -> int:
     # still awaiting its first successful confirmation.
     for cid, info in list(pending["registration"].items()):
         name = info["name"]
+        actor_id = info.get("actor_id")  # None for entries pending from before C.1 — falls back to legacy_actor_id(name) in dex_register
         attempts = info.get("attempts", 1)
-        ident = dex_register(name)  # idempotent; just need element/zone/guardian again
+        ident = dex_register(name, actor_id)  # idempotent; just need element/zone/guardian again
         result = _post_comment_verified(
             REG_POST,
             f"🦞 **{name}** registered! {ident['element']}/{ident['zone']}/{ident['guardian']}. Pop: {_load(POKEDEX).get('total',0)} | Open bounties: {len(bounty_list())}{_retry_suffix(attempts)}",
@@ -456,6 +577,10 @@ def scan_moltbook() -> int:
             proc.add(cid)
             del pending["registration"][cid]
             c += 1
+            _record_contribution(
+                _retry_event(cid, actor_id or legacy_actor_id(name), name),
+                "join", STATUS_MATERIALIZED, artifact_refs=[f"pokedex:{actor_id or legacy_actor_id(name)}"],
+            )
             print(f"  [mb] reg {name} confirmed on retry")
         else:
             pending["registration"][cid]["attempts"] = attempts + 1
@@ -472,6 +597,10 @@ def scan_moltbook() -> int:
             proc.add(cid)
             del pending["bounty_claim"][cid]
             c += 1
+            _record_contribution(
+                _retry_event(cid, legacy_actor_id(info["sender"]), info["sender"]),
+                "bounty_claim", STATUS_MATERIALIZED, artifact_refs=[f"bounty:{info['bid']}"],
+            )
             print(f"  [mb] bounty {info['bid']} claim confirmed on retry")
         else:
             pending["bounty_claim"][cid]["attempts"] = attempts + 1
@@ -487,6 +616,10 @@ def scan_moltbook() -> int:
         if result.get("verified"):
             proc.add(cid)
             del pending["bounty_reject"][cid]
+            _record_contribution(
+                _retry_event(cid, legacy_actor_id(cid), "?"),
+                "bounty_claim", STATUS_REJECTED,
+            )
         else:
             pending["bounty_reject"][cid]["attempts"] = attempts + 1
             print(f"  [mb] bounty {info['bid']} rejection still not verified ({result.get('reason')}), retrying next cycle")
@@ -502,26 +635,35 @@ def scan_moltbook() -> int:
             proc.add(cid)
             del pending["bounty_done"][cid]
             c += 1
+            _record_contribution(
+                _retry_event(cid, legacy_actor_id(info["claimed_by"]), info["claimed_by"]),
+                "bounty_claim", STATUS_MATERIALIZED, artifact_refs=[f"bounty:{info['bid']}:done"],
+            )
             print(f"  [mb] bounty {info['bid']} done confirmed on retry")
         else:
             pending["bounty_done"][cid]["attempts"] = attempts + 1
             print(f"  [mb] bounty {info['bid']} done still not verified ({result.get('reason')}), retrying next cycle")
 
-    resp = _mb(f"posts/{REG_POST}/comments?sort=new&limit=50")
-    if not resp or not resp.get("success"):
+    comments = _fetch_comments_resilient(REG_POST)
+    if not comments:
         _save(PROC_MB, {"comment_ids": list(proc)})
         _save(PENDING_MB, pending)
         return c
 
     already_pending = set(pending["registration"]) | set(pending["bounty_claim"]) | set(pending["bounty_reject"]) | set(pending["bounty_done"])
 
-    for cmt in resp.get("comments", []):
+    for cmt in comments:
         cid = cmt.get("id", "")
         if cid in proc or cid in already_pending:
             continue
-        text = cmt.get("content", "")
-        author = cmt.get("author", {})
-        sender = author.get("name", "?")
+
+        # Surface-specific step ends here: normalize into the canonical
+        # event once, then work only with `event` (SPEC.md §C.4). `sender`
+        # kept as a local alias of event.display_name for the existing
+        # reply-text f-strings below.
+        event = moltbook_comment_to_event(cmt)
+        text = event.content
+        sender = event.display_name
 
         # First-encounter policy (docs/BEFUND.md §14): if the action
         # (dex_register/bounty_claim/bounty_complete) succeeds but the
@@ -532,15 +674,16 @@ def scan_moltbook() -> int:
         # dex_register()'s/bounty_claim()'s idempotent return value.
 
         # --- Registration intent ---
-        if _kw_match(text, "join", "register", "sign up", "add me"):
+        if classify_command(text) == "join":
             m = re.search(r"name[:\s]+([^\n]+)", text, re.I)
-            name = _sanitize_name(m.group(1), sender) if m else sender
-            ident = dex_register(name)
+            name = sanitize_name(m.group(1), sender) if m else sender
+            ident = dex_register(name, event.actor_id)
             if ident.get("_dup"):
-                # Genuinely already registered under this name by a PRIOR,
-                # different comment — nothing to retry for THIS cid, no
-                # reply was ever attempted for it.
+                # Genuinely already registered under this actor_id by a
+                # PRIOR, different comment — nothing to retry for THIS
+                # cid, no reply was ever attempted for it.
                 proc.add(cid)
+                _record_contribution(event, "join", STATUS_ACCEPTED)
                 continue
             result = _post_comment_verified(
                 REG_POST,
@@ -550,9 +693,12 @@ def scan_moltbook() -> int:
             if result.get("verified"):
                 proc.add(cid)
                 c += 1
+                _record_contribution(event, "join", STATUS_MATERIALIZED,
+                                      artifact_refs=[f"pokedex:{event.actor_id}"])
                 print(f"  [mb] reg {name} via {sender}")
             else:
-                pending["registration"][cid] = {"name": name, "attempts": 1}
+                pending["registration"][cid] = {"name": name, "actor_id": event.actor_id, "attempts": 1}
+                _record_contribution(event, "join", STATUS_RECEIVED)
                 print(f"  [mb] reg {name} via {sender} — reply not verified ({result.get('reason')}), retrying next cycle")
             continue
 
@@ -579,9 +725,11 @@ def scan_moltbook() -> int:
                 if reply.get("verified"):
                     proc.add(cid)
                     c += 1
+                    _record_contribution(event, "bounty_claim", STATUS_MATERIALIZED, artifact_refs=[f"bounty:{bid}"])
                     print(f"  [mb] bounty {bid} claimed by {sender}")
                 else:
                     pending["bounty_claim"][cid] = {"bid": bid, "sender": sender, "title": result["title"], "attempts": 1}
+                    _record_contribution(event, "bounty_claim", STATUS_RECEIVED)
                     print(f"  [mb] bounty {bid} claim reply not verified ({reply.get('reason')}), retrying next cycle")
             else:
                 reply = _post_comment_verified(
@@ -591,6 +739,7 @@ def scan_moltbook() -> int:
                 )
                 if reply.get("verified"):
                     proc.add(cid)
+                    _record_contribution(event, "bounty_claim", STATUS_REJECTED)
                 else:
                     pending["bounty_reject"][cid] = {"bid": bid, "attempts": 1}
                     print(f"  [mb] bounty {bid} rejection reply not verified ({reply.get('reason')}), retrying next cycle")
@@ -613,6 +762,7 @@ def scan_moltbook() -> int:
                 if reply.get("verified"):
                     proc.add(cid)
                     c += 1
+                    _record_contribution(event, "bounty_claim", STATUS_MATERIALIZED, artifact_refs=[f"bounty:{bid}:done"])
                     print(f"  [mb] bounty {bid} done by {sender}")
                 else:
                     pending["bounty_done"][cid] = {"bid": bid, "title": result["title"], "claimed_by": result["claimed_by"], "attempts": 1}
@@ -653,12 +803,12 @@ def scan_brain() -> int:
     brain_proc = _load(DIR / "brain_processed.json")
     done = set(brain_proc.get("issues", {}).keys())
 
-    resp = _mb(f"posts/{REG_POST}/comments?sort=new&limit=50")
-    if not resp or not resp.get("success"):
+    comments = _fetch_comments_resilient(REG_POST)
+    if not comments:
         return 0
 
     c = 0
-    for cmt in resp.get("comments", []):
+    for cmt in comments:
         cid = cmt.get("id", "")
         if cid not in proc or cid in done:
             continue

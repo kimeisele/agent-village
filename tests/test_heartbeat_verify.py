@@ -20,12 +20,15 @@ def test_already_verified_without_fresh_challenge(monkeypatch, tmp_path):
     that's the one case where "no verification object" legitimately means
     success."""
     monkeypatch.setattr(hb, "CHALLENGE_STATE", tmp_path / "challenge_failures.json")
+    monkeypatch.setattr(hb, "REPLY_COMMENT_IDS", tmp_path / "reply_comment_ids.json")
     monkeypatch.setattr(hb, "_mb", lambda path, method="GET", body=None: {
         "success": True,
         "comment": {"id": "c1", "content": "hi", "verification_status": "verified"},
     })
     result = hb._post_comment_verified("post123", "hello", parent_id="c0")
-    assert result == {"posted": True, "verified": True}
+    # comment_id now always included (docs/SPEC.md §C.5 — persist the
+    # Moltbook POST result id immediately, regardless of verify outcome).
+    assert result == {"posted": True, "verified": True, "comment_id": "c1"}
 
 
 def test_no_verification_status_at_all_is_not_verified(monkeypatch, tmp_path):
@@ -34,6 +37,7 @@ def test_no_verification_status_at_all_is_not_verified(monkeypatch, tmp_path):
     verified=True. Only verification_status == "verified" counts as
     success — this was the old (wrong) fallback behavior."""
     monkeypatch.setattr(hb, "CHALLENGE_STATE", tmp_path / "challenge_failures.json")
+    monkeypatch.setattr(hb, "REPLY_COMMENT_IDS", tmp_path / "reply_comment_ids.json")
     monkeypatch.setattr(hb, "_mb", lambda path, method="GET", body=None: {
         "success": True,
         "comment": {"id": "c1", "content": "hi"},
@@ -45,6 +49,7 @@ def test_no_verification_status_at_all_is_not_verified(monkeypatch, tmp_path):
 
 def test_challenge_solved(monkeypatch, tmp_path):
     monkeypatch.setattr(hb, "CHALLENGE_STATE", tmp_path / "challenge_failures.json")
+    monkeypatch.setattr(hb, "REPLY_COMMENT_IDS", tmp_path / "reply_comment_ids.json")
     calls = []
 
     def fake_mb(path, method="GET", body=None):
