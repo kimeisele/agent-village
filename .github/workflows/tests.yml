@@ -1,0 +1,29 @@
+# Pure verification infrastructure — no product scope change. Runs the
+# existing test suite on push/PR to main so "N/N grün" is independently
+# checkable in the Actions log instead of only ever asserted locally
+# (see docs/BEFUND.md §20). Does not touch village-heartbeat.yml or any
+# of the feature-flag/cron behavior — this workflow only runs pytest.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run test suite
+        run: python3 -m pytest tests/ -v
