@@ -1503,3 +1503,54 @@ variierten Abständen (z. B. 30s, 2min, 5min, 10min) nötig, um eine
 Schwelle zu bestimmen — ein einzelner Gegen-Datenpunkt reicht dafür nicht.
 Bis dahin bleibt der "done"-Schritt offiziell offen (§18-Status
 unverändert), auch wenn dieser eine Versuch nicht fehlgeschlagen ist.
+
+---
+
+## §26 — Gap-Analyse SPEC↔Code, selbst durchgeführt (Lead, 2026-07-19, kein Builder-Auftrag)
+
+Im Rahmen von "Evidence before Expansion" (Kim + zweiter Lead-Agent):
+Workstream 2 (SPEC↔Code Gap-Analyse) selbst als Lead durchgeführt statt an
+den Builder delegiert — reine Recherche/kleine Fixes, kein Grund für den
+Umweg. Ergebnis:
+
+**SPEC → Code:** §A.1-8, §C.1-C.5 wie behauptet implementiert (bereits
+during PR #3/#4-Reviews verifiziert). §A.9-12, §D: korrekt bei 0%
+Implementierung, nur als Begriffe geführt, keine versehentliche
+Vorwegnahme gefunden.
+
+**Code → SPEC, zwei echte Funde:**
+
+1. **`village/moltbook_captcha.py::_deepseek_solve()`** — ein bereits
+   bestehender, gegateter LLM-Fallback-Pfad (aus steward-protocol
+   portiert, älter als SPEC v2), der beim Scheitern des deterministischen
+   Captcha-Solvers eine Mathe-Challenge per DeepSeek löst. Eng technisch,
+   keine Content-Kognition, keine Fachentscheidung — aber SPEC.md §D
+   listete "LLM calls" bisher pauschal als zurückgestellt, ohne diesen
+   Fall auszunehmen. Kein Sicherheitsrisiko (Flag `VILLAGE_CHALLENGE_LLM_ENABLED`
+   aus, `DEEPSEEK_API_KEY` nicht gesetzt, also inert) — aber eine echte
+   Dokumentationslücke. Gefixt: §D um einen Absatz ergänzt, der diesen
+   bestehenden, engen Fall explizit von der Cognition-Kernel-Aussage
+   trennt.
+2. **`village/brain.py::process_comment()`/`extract_title()`** — tote
+   Funktionen, verifiziert per `grep` über das gesamte Repo (Code + Docs):
+   `heartbeat.py::scan_brain()` importiert nur `is_actionable`/
+   `create_issue`, baut Title/Body inline neu, ruft `process_comment()`
+   nie auf. Anders als `nadi_send.py`/`setup_node.py` in hermes-sankhya-25
+   (dort durch AGENTS.md als Einstiegspunkt dokumentiert und deshalb
+   bewusst nicht gelöscht) gibt es hier keine Dokumentation, die
+   `process_comment()` als API-Fläche ausweist — echt tot, kein
+   Grenzfall. Entfernt, zusammen mit dem dadurch verwaisten
+   `extract_title()` und den beiden dadurch ungenutzten Imports
+   (`time`, `pathlib.Path`).
+
+**Workstream 3 (End-to-End-Trace, Proof 1 gegen die ideale Kette
+Discovery→Assessment→Authority Gate→Work Order→Execution→Review→Merge→
+Reputation→Knowledge):** 5 von 10 Kettengliedern real durchlaufen
+(Ingress, Assessment [nur Keyword-Matching], Authority Gate, Execution,
+Merge). Discovery, Review, Reputation existieren strukturell noch gar
+nicht — keine offene Frage, sondern ein akkurates Bild vom aktuellen
+Ausbaustand, deckungsgleich mit Value Model "External Contributions,
+Stufe 1".
+
+Kein neuer Slice, keine SPEC-§D-Aktivierung — reine Präzisierung und
+Aufräumen von bereits gefundenem, echtem technischem Nebenprodukt.
