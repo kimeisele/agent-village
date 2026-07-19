@@ -163,3 +163,68 @@ input, never a resolved runner filesystem path. Reason: prevent
 accidental exfiltration of runner/checkout metadata (or anything else
 reachable on the runner's filesystem) to the external provider via a
 mistyped or malicious workflow input.
+
+## Merge and live proof (2026-07-19)
+
+**Merged:** PR #16, squash merge, merge commit
+`5da0273479f510de85f7824fea4f12d9a32575da` on `main`. Post-merge smoke
+on that exact commit: full suite 297/297, `py_compile` clean, focused
+operator-execution + path-validation + authority tests all green. `ruff
+check village/ scripts/ tests/` (first-ever run in this repo -- no
+`pyproject.toml`/`ruff.toml` exists, so no prior baseline either way)
+found 6 pre-existing style findings (import-order in `scripts/
+operator_execute.py`, one unused import there, one unused import in
+`tests/test_bounty_review.py`) -- real, minor, not fixed in this closure
+pass (out of scope for a merge-and-verify slice), not a regression since
+nothing enforced ruff before.
+
+**Live proof: run
+[29696150575](https://github.com/kimeisele/agent-village/actions/runs/29696150575)**,
+triggered via `workflow_dispatch` against `main`, checkout confirmed
+(from the raw job log) at exactly `5da0273479f510de85f7824fea4f12d9a32575da`.
+`target_file=village/heartbeat.py`, `model=deepseek-v4-flash`,
+`actor_id=operator-proof-01`, no `bounty_id` given -- the script created
+and claimed its own disposable, clearly-labeled proof bounty (`b004`)
+first, exactly as designed.
+
+**Structural result, not a model self-claim:** `accepted: true`.
+`before.bounty.status = "claimed"` -> `after.bounty.status =
+"submitted"`; contract stayed `state: "active"` throughout (never
+`fulfilled` -- this slice stops at `submitted`, as designed).
+`phase_log`: exactly one `generate` (`finish_reason: "stop"`,
+`has_visible_text: true`, `has_reasoning_text: false` -- thinking mode
+correctly off) followed by `evaluate: accepted` -- no repair, no
+interpretation call needed. `output.gaps` contains 5 entries, each
+citing a real function and line in `village/heartbeat.py` (`_load()`,
+`_post_comment_verified()`, `_save()`, `_parse_contract_terms()`,
+`REG_POST`) -- structurally validated by the worker's own shape check,
+independently legible against the real file, not accepted on the
+model's say-so.
+
+**Usage:** `prompt_tokens: 5470`, `completion_tokens: 339`,
+`reasoning_tokens: 0`, `total_tokens: 5809`, `cost_usd: 0.00086072`,
+`duration_seconds: 5.91`. Budget on the auto-created proof bounty's
+contract was fully unconstrained (no `contract_terms` supplied, all
+limits `null`) -- real spend recorded (`used_tokens: 5809`,
+`used_cost_usd: 0.00086072`) against it regardless.
+
+**Secret check, quoted:** the full raw job log contains exactly one
+occurrence of `DEEPSEEK_API_KEY`, GitHub's own masked env-block line
+(`DEEPSEEK_API_KEY: ***`). No `sk-`/`Bearer`/`Authorization` match
+anywhere in the log or the evidence artifact.
+
+**No repository write:** the workflow contains no `git commit`/`git
+push` step at all (confirmed absent from the log), and `permissions:
+contents: read` makes it structurally impossible regardless. Local
+`main` after this run remains at the same commit
+(`5da0273479f510de85f7824fea4f12d9a32575da`), `git status --short`
+clean.
+
+**Known limits, unchanged:** `submitted -> review -> done` still doesn't
+exist as an automated path. No selection logic for which bounty to work
+on -- every run names one explicitly. No tie to Moltbook/GitHub ingress.
+
+**Authorities explicitly not granted, reconfirmed by this proof:** the
+run created and moved a bounty to `submitted` and nothing further -- no
+`bounty_review()`, no `contract.fulfill()`, no `bounty_complete()`, no
+repository commit, no autonomous follow-up execution.
