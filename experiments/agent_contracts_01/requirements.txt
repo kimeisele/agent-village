@@ -1,0 +1,11 @@
+# Isolated to this experiment folder only. NOT a production dependency of
+# Agent Village. Do not reference from village/*.py or any workflow.
+#
+# Pinned to the exact version verified in
+# docs/research/AGENT_CONTRACTS_EXPERIMENT_01.md step 1: PyPI release
+# 0.3.2 == GitHub tag v0.3.2 == commit
+# 273d9e02e136759445ea18e2fda94ffd609f0221 in flyersworder/agent-contracts.
+# Requires Python >=3.12 (the repo's own interpreter is 3.11 -- run this
+# experiment's venv with a separate 3.12+ interpreter, see README.md).
+ai-agent-contracts==0.3.2
+pytest>=8.0
