@@ -409,7 +409,17 @@ def dex_list() -> list[dict]:
 
 
 # ── Bounty Board ─────────────────────────────────────────
-def bounty_create(title: str, description: str, reward: str = "reputation") -> dict:
+def bounty_create(
+    title: str,
+    description: str,
+    reward: str = "reputation",
+    contract_terms: dict | None = None,
+) -> dict:
+    """`contract_terms`, if given, is stored verbatim on the bounty and
+    parsed by `bounty_claim()` via the existing `_parse_contract_terms()`
+    -- no separate creation-time validation, same atomic-rejection-on-
+    claim behavior as a manually-authored bounty with `contract_terms`
+    already had."""
     board = _load(BOUNTIES)
     bounties = board.get("bounties", [])
     bid = f"b{len(bounties)+1:03d}"
@@ -425,6 +435,8 @@ def bounty_create(title: str, description: str, reward: str = "reputation") -> d
         "claimed_at": None,
         "completed_at": None,
     }
+    if contract_terms is not None:
+        bounty["contract_terms"] = contract_terms
     bounties.append(bounty)
     board["bounties"] = bounties
     _save(BOUNTIES, board)

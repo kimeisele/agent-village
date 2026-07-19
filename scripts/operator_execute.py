@@ -46,6 +46,24 @@ from village.deepseek_provider import DEEPSEEK_API_KEY_VAR, DeepSeekProvider
 from village.execution_orchestrator import ExecutionRequest, run_operator_execution
 
 
+# Conservative, explicit budget for the auto-created disposable proof
+# bounty (Repository Fortress 01) -- prior live proofs (runs 29691336561,
+# 29696150575) spent ~5.8k tokens / ~$0.0009 / ~5s each, comfortably
+# inside these limits. Before this slice the auto-created proof contract
+# had every Budget field `null` (fully unconstrained) -- see docs/
+# research/OPERATOR_EXECUTION_01.md's live-proof section and docs/
+# BEFUND.md. Reuses the existing contract_terms/Budget structure
+# (village/contracts.py, village/heartbeat.py::_parse_contract_terms())
+# -- no parallel budget mechanism.
+PROOF_CONTRACT_TERMS = {
+    "budget": {
+        "tokens": 40_000,
+        "cost_usd": 0.05,
+        "time_seconds": 180,
+    },
+}
+
+
 class TargetPathError(Exception):
     """Raised by resolve_target_file() for any rejected target_file.
     The message intentionally names only the requested (relative) input,
@@ -155,6 +173,7 @@ def main() -> int:
                 "production use. Confined to the ephemeral CI runner --"
                 "this workflow has no write permission to the repo."
             ),
+            contract_terms=PROOF_CONTRACT_TERMS,
         )
         bounty_id = created["id"]
         claimed = hb.bounty_claim(bounty_id, actor_id)
