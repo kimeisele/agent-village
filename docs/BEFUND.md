@@ -1212,3 +1212,19 @@ aufgelöst).
 
 Kein Schreibzugriff über bereits bestehendes Reply-Verhalten hinaus, kein
 Cron, keine neuen Flags.
+
+---
+
+## §22 — SPEC.md §5 offener Punkt teilweise geschlossen (2026-07-19)
+
+In `kimeisele/hermes-sankhya-25` wurde `scripts/nadi_daemon.py` gelöscht
+(bestätigt tot: referenzierte `data/federation/peer.json`, das seit dem
+Split nicht mehr dort existiert, kein Workflow und keine
+`AGENTS.md`-Erwähnung — Commit
+[`307b10f`](https://github.com/kimeisele/hermes-sankhya-25/commit/307b10f)).
+`scripts/nadi_send.py` und `scripts/setup_node.py` wurden bewusst **nicht**
+angefasst — `AGENTS.md` dokumentiert `setup_node.py` als den offiziellen
+Setup-Einstiegspunkt des Repos und listet `nadi_send.py` im Skript-Inventar,
+beide sind also trotz vermutlich desselben kaputten `peer.json`-Pfads kein
+Aufräumfall, sondern eine offene Architekturfrage (wo lebt `peer.json`
+künftig für dieses Repo?) — nicht hier entschieden.
