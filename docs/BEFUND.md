@@ -1416,3 +1416,90 @@ zwischen Läufen instabil (Python-`set`, kein deterministisches Serialisieren)
 
 Kein Schreibzugriff über den vom Heartbeat-Workflow selbst
 vorgenommenen Commit hinaus.
+
+---
+
+## §25 — BEFUND §18 Bounty-"done"-Anomalie: Reproduktionsversuch (2026-07-19)
+
+Rein diagnostisch, wie angeordnet: kein Code-Fix, keine Änderung an
+`scan_moltbook()`/`village_core.py`. Ausgeführt lokal, direkt gegen die
+echten `village.heartbeat`-Funktionen (`bounty_claim`/`bounty_complete`/
+`_post_comment_verified`) mit den lokal vorhandenen Moltbook-Credentials —
+derselbe Code-Pfad wie im echten Heartbeat, nur manuell statt via
+GitHub Actions ausgelöst.
+
+### Aufbau
+
+Alter Wegwerf-Kommentar `aa964c8e-...` aus §18 ist bereits gelöscht, daher
+neuer Durchlauf mit neuen Kommentaren gegen `b001` (`e8005376-...`-Post).
+Einziger geänderter Parameter gegenüber §18: der zeitliche Abstand
+zwischen Claim- und Done-Kommentar.
+
+```json
+{
+  "event": "bounty_claim",
+  "source_post_id": "e8005376-708a-4d06-ac6a-3c14c97f139d",
+  "bid": "b001",
+  "reply_comment_id": "02762a50-7fa9-44b1-9a7c-5561dcbd4647",
+  "verification_status": "verified"
+}
+```
+
+10,3 Minuten Pause (617s, absichtlich deutlich länger als die vermutete
+kurze Lücke bei §18 — und ohnehin durch das ~1-Post/2,5-Min-Rate-Limit
+erzwungen, hier bewusst weit darüber).
+
+```json
+{
+  "event": "bounty_done",
+  "source_post_id": "e8005376-708a-4d06-ac6a-3c14c97f139d",
+  "bid": "b001",
+  "reply_comment_id": "224236c0-d4db-4203-9702-1a18e0b60c4c",
+  "verification_status": "verified",
+  "gap_to_previous_comment_seconds": 617
+}
+```
+
+### Ergebnis: Anomalie NICHT reproduziert
+
+6 Abfragen über 168 Sekunden (0s/31s/63s/94s/126s/157s Abstand,
+Methodik identisch zu §18), je gegen `sort=new`, `sort=old`, `sort=top`,
+rekursiv über alle Verschachtelungstiefen: der "done"-Kommentar
+(`224236c0-...`) war **bei jeder einzelnen Abfrage sofort in allen drei
+Sortierungen sichtbar** — kein einziger Fehltreffer, nicht einmal beim
+allerersten Poll nach 11,8 Sekunden. Zum Vergleich: der §18-Fall zeigte
+konstante Unsichtbarkeit über 2,5 Minuten (6 Versuche), nicht einmal
+verzögert.
+
+**Das ist kein Beweis, dass "größerer zeitlicher Abstand" die Ursache
+und jetzt behoben ist.** Es ist ein einzelner Nicht-Reproduktionsversuch.
+Mögliche Erklärungen, keine davon hier unterschieden:
+(a) der Abstand war tatsächlich die Ursache (Spam-/Ähnlichkeits-Heuristik
+zwischen zwei kurz aufeinanderfolgenden Kommentaren desselben Accounts,
+wie in §18 vermutet), (b) die Anomalie ist grundsätzlich selten/
+nichtdeterministisch und ist diesmal einfach nicht aufgetreten,
+unabhängig vom Abstand, (c) ein anderer, unbekannter Faktor (Tageszeit,
+Serverlast, ein zwischenzeitliches Moltbook-Fix) spielt eine Rolle. Mit
+einem einzigen Datenpunkt pro Bedingung (§18: kurzer Abstand → nicht
+sichtbar; §25: langer Abstand → sofort sichtbar) ist das nicht
+unterscheidbar. Kein Workaround nötig, da keine Reproduktion — Punkt 2
+des Auftrags (Workaround-Versuch) entfällt.
+
+### Aufräumen
+
+Beide Wegwerf-Kommentare gelöscht (`02762a50-...`, `224236c0-...`, beide
+`200 "Comment deleted"`). `data/village/bounties.json`: `b001` zurück auf
+`open`/`claimed_by: null`/`claimed_at: null`/`completed_at: null`.
+`data/village/reply_comment_ids.json` (neu von diesem Diagnoselauf
+angelegt, C.5-Härtung aus PR #3 — lokal, nie committet) gelöscht.
+`git status --short data/` nach Aufräumen leer. Live-Nachprüfung: kein
+`diagA-...`-Tag mehr in der Kommentarliste des Registrierungsposts.
+
+### Empfehlung
+
+Kein Code-Fix in diesem Auftrag (wie angeordnet). Falls ein belastbarerer
+Befund gewünscht ist: mehrere weitere Durchläufe mit systematisch
+variierten Abständen (z. B. 30s, 2min, 5min, 10min) nötig, um eine
+Schwelle zu bestimmen — ein einzelner Gegen-Datenpunkt reicht dafür nicht.
+Bis dahin bleibt der "done"-Schritt offiziell offen (§18-Status
+unverändert), auch wenn dieser eine Versuch nicht fehlgeschlagen ist.
