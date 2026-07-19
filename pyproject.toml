@@ -21,3 +21,7 @@ strict_equality = true
 # NOT enabled yet (future steps):
 # disallow_any_explicit = true
 # strict = true
+
+[[tool.mypy.overrides]]
+module = "village.nadi_bridge"
+ignore_missing_imports = true
