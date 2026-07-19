@@ -3,6 +3,13 @@
 # disconnected until Proof 4 is explicitly approved (see
 # docs/ARCHITECTURE_VISION.md §8/§12). workflow_dispatch only, so it can be
 # hand-run for testing without going live on a cron.
+#
+# Hard-set to secrets.GITHUB_TOKEN (docs/MOLTBOOK_CONTRACT_NOTES.md /
+# docs/BEFUND.md token-scope check): previously used
+# `secrets.FEDERATION_PAT || secrets.GITHUB_TOKEN`. No FEDERATION_PAT
+# secret exists in this repo, so this was a no-op today, but the pattern
+# would have silently started using a broader PAT the moment one was ever
+# added here for any other reason. Removed the fallback entirely.
 name: Node Heartbeat
 
 on:
@@ -24,7 +31,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.FEDERATION_PAT || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -37,7 +44,7 @@ jobs:
       - name: Download nadi_kit
         env:
           NODE_PRIVATE_KEY: ${{ secrets.NODE_PRIVATE_KEY }}
-          GH_TOKEN: ${{ secrets.FEDERATION_PAT || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           curl -sL -H "Authorization: token ${GH_TOKEN}" \
             "https://raw.githubusercontent.com/kimeisele/steward-federation/main/nadi_kit.py" \
@@ -47,8 +54,8 @@ jobs:
       - name: Run NADI heartbeat cycle
         env:
           NODE_PRIVATE_KEY: ${{ secrets.NODE_PRIVATE_KEY }}
-          GH_TOKEN: ${{ secrets.FEDERATION_PAT || secrets.GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.FEDERATION_PAT || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 nadi_kit.py --peer-json data/federation/peer.json sync
           python3 nadi_kit.py --peer-json data/federation/peer.json heartbeat --health 1.0
