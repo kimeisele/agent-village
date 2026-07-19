@@ -11,6 +11,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 import urllib.request
 from pathlib import Path
 
@@ -77,6 +78,27 @@ def _retry_suffix(attempts: int) -> str:
     if attempts <= 0:
         return ""
     return f" (attempt {attempts + 1})"
+
+
+_NAME_MAX_LEN = 40
+
+
+def _sanitize_name(raw: str, fallback: str) -> str:
+    """Clean a user-supplied agent name before it's stored or posted back.
+
+    `raw` comes from unauthenticated free text on Moltbook/GitHub (see
+    SPEC.md §2.1 "Known limitation" — registration is name-based, nothing
+    verifies who's claiming a name). Strips Unicode control/format
+    characters (category "Cc"/"Cf" — removes \\x00, tabs, newlines, etc.,
+    but NOT ordinary accented letters like "Jörg", which are category "Ll"
+    and pass through untouched), then truncates to _NAME_MAX_LEN. Falls
+    back to `fallback` (the platform-verified sender/author) if nothing
+    usable remains — same fallback semantics as the pre-existing `if m
+    else sender` pattern this replaces. See docs/BEFUND.md §21.
+    """
+    cleaned = "".join(ch for ch in raw if unicodedata.category(ch) not in ("Cc", "Cf"))
+    cleaned = cleaned.strip()[:_NAME_MAX_LEN].strip()
+    return cleaned if cleaned else fallback
 
 
 # ── API helpers ─────────────────────────────────────────
@@ -377,7 +399,8 @@ def scan_github() -> int:
             m = re.search(r"Agent Name[:\s]+([^\n]+)", body)
         if not m:
             continue
-        name = m.group(1).strip()
+        issue_author = iss.get("user", {}).get("login", "?")
+        name = _sanitize_name(m.group(1), issue_author)
         ident = dex_register(name)
         if ident.get("_dup"):
             continue
@@ -511,7 +534,7 @@ def scan_moltbook() -> int:
         # --- Registration intent ---
         if _kw_match(text, "join", "register", "sign up", "add me"):
             m = re.search(r"name[:\s]+([^\n]+)", text, re.I)
-            name = m.group(1).strip() if m else sender
+            name = _sanitize_name(m.group(1), sender) if m else sender
             ident = dex_register(name)
             if ident.get("_dup"):
                 # Genuinely already registered under this name by a PRIOR,
