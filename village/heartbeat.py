@@ -29,6 +29,7 @@ from village.village_core import (
     migrate_pokedex,
     moltbook_comment_to_event,
     sanitize_name,
+    sha256_hex,
 )
 
 # ── Config ──────────────────────────────────────────────
@@ -499,6 +500,27 @@ def _empty_pending() -> dict:
     return {"registration": {}, "bounty_claim": {}, "bounty_reject": {}, "bounty_done": {}}
 
 
+def _retry_event(cid: str, actor_id: str, display_name: str) -> CanonicalIngressEvent:
+    """Reconstruct a CanonicalIngressEvent for a comment being confirmed
+    via the retry pass, which only has the small `info` dict captured at
+    first-encounter time (docs/BEFUND.md §14), not the original raw
+    comment payload. `content`/`content_sha256` are placeholders (empty
+    string) -- the retry pass only needs this event to call
+    _record_contribution() with the correct dedup_key (`moltbook:{cid}`),
+    which depends only on `surface`+`external_id`, not on content."""
+    return CanonicalIngressEvent(
+        event_id=f"moltbook:{cid}",
+        surface="moltbook",
+        external_id=cid,
+        actor_id=actor_id,
+        display_name=display_name,
+        content="",
+        content_sha256=sha256_hex(""),
+        received_at=time.time(),
+        dedup_key=f"moltbook:{cid}",
+    )
+
+
 def _fetch_comments_resilient(post_id: str) -> list[dict]:
     """Fetch a post's comments tolerating the two listing gaps documented
     in docs/MOLTBOOK_CONTRACT_NOTES.md points 7/8: `sort=new` has been
@@ -555,6 +577,10 @@ def scan_moltbook() -> int:
             proc.add(cid)
             del pending["registration"][cid]
             c += 1
+            _record_contribution(
+                _retry_event(cid, actor_id or legacy_actor_id(name), name),
+                "join", STATUS_MATERIALIZED, artifact_refs=[f"pokedex:{actor_id or legacy_actor_id(name)}"],
+            )
             print(f"  [mb] reg {name} confirmed on retry")
         else:
             pending["registration"][cid]["attempts"] = attempts + 1
@@ -571,6 +597,10 @@ def scan_moltbook() -> int:
             proc.add(cid)
             del pending["bounty_claim"][cid]
             c += 1
+            _record_contribution(
+                _retry_event(cid, legacy_actor_id(info["sender"]), info["sender"]),
+                "bounty_claim", STATUS_MATERIALIZED, artifact_refs=[f"bounty:{info['bid']}"],
+            )
             print(f"  [mb] bounty {info['bid']} claim confirmed on retry")
         else:
             pending["bounty_claim"][cid]["attempts"] = attempts + 1
@@ -586,6 +616,10 @@ def scan_moltbook() -> int:
         if result.get("verified"):
             proc.add(cid)
             del pending["bounty_reject"][cid]
+            _record_contribution(
+                _retry_event(cid, legacy_actor_id(cid), "?"),
+                "bounty_claim", STATUS_REJECTED,
+            )
         else:
             pending["bounty_reject"][cid]["attempts"] = attempts + 1
             print(f"  [mb] bounty {info['bid']} rejection still not verified ({result.get('reason')}), retrying next cycle")
@@ -601,6 +635,10 @@ def scan_moltbook() -> int:
             proc.add(cid)
             del pending["bounty_done"][cid]
             c += 1
+            _record_contribution(
+                _retry_event(cid, legacy_actor_id(info["claimed_by"]), info["claimed_by"]),
+                "bounty_claim", STATUS_MATERIALIZED, artifact_refs=[f"bounty:{info['bid']}:done"],
+            )
             print(f"  [mb] bounty {info['bid']} done confirmed on retry")
         else:
             pending["bounty_done"][cid]["attempts"] = attempts + 1

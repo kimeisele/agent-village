@@ -364,6 +364,19 @@ display name collide into one pokedex entry. Fix:
 - Two different actor_ids that pick the same display name must not collide
   into one entry (this is the concrete bug being fixed).
 
+**Known limitation, not fixed by this slice (found in independent review of
+PR #3, docs/BEFUND.md §23-addendum):** this is fully solved for the GitHub
+surface, where `user.id` is a real, stable, platform-issued numeric id. For
+the Moltbook surface, no such id has ever been observed in the API payload
+— `moltbook_comment_to_event()` falls back to `author.name` as `actor_id`
+(honestly documented in code, not hidden). Two real Moltbook agents
+choosing the same display name therefore still collide into one pokedex
+entry today, exactly as before this slice — the mechanism (actor_id-keyed
+identity) is in place and will close this gap automatically the moment
+Moltbook's API ever exposes a real per-author id, but the gap itself is
+open, not closed. Do not claim §E.1 as fully solved across both surfaces
+without this caveat.
+
 ### C.2 Minimal canonical ingress event
 
 One event shape, produced by both entry points:
@@ -448,7 +461,11 @@ complex reputation/governance; token economy.
 ## E. Acceptance criteria
 
 1. Distinct actor_ids that share a display name remain separate pokedex
-   entries.
+   entries. (See §C.1 "Known limitation": mechanically true given a real
+   actor_id; the Moltbook surface currently supplies a name-derived
+   actor_id, so this criterion is verified against GitHub's real `user.id`
+   and against synthetic actor_ids for Moltbook — not yet against two real
+   distinct Moltbook agents sharing a name.)
 2. A display-name change for the same actor_id preserves the same identity
    (same entry, updated metadata).
 3. Existing `pokedex.json` entries remain readable, or are deterministically

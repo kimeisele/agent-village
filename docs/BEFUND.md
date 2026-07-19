@@ -1317,3 +1317,39 @@ Einführung sofort einen Platz in jedem `_setup()`, das `scan_moltbook()`/
 Keine der in SPEC.md §D genannten zurückgestellten Flächen wurde aktiviert
 (grep bestätigt: keine neuen `VILLAGE_*_ENABLED`-Defaults, keine
 Discussions-, LLM- oder NADI-Ingress-Code-Änderung).
+
+### §23-Nachtrag — zwei Funde aus Kims unabhängigem Review von PR #3 (2026-07-19)
+
+Kim hat den Diff und CI-Lauf selbst nachvollzogen (nicht nur den obigen
+Bericht übernommen) und zwei reale Lücken gefunden, die weder im
+ursprünglichen Bericht noch in den 14 neuen Tests auftauchten:
+
+**Fund 1 (behoben):** Der Retry-Pass in `scan_moltbook()` (vier Zweige:
+registration, bounty_claim, bounty_reject, bounty_done) rief bei
+erfolgreicher Bestätigung nie `_record_contribution(...,
+STATUS_MATERIALIZED)` auf — nur der Erstversuchs-Pfad tat das. Ein
+Contribution-Datensatz, dessen Bestätigung erst im Retry gelang (der in
+BEFUND §15 dokumentierte, real beobachtete Normalfall bei Moltbooks
+Content-Dedup), blieb dadurch dauerhaft auf `"received"` stehen, obwohl die
+Aktion vollständig abgeschlossen war. Fix: neue Hilfsfunktion
+`heartbeat._retry_event()` rekonstruiert ein `CanonicalIngressEvent` aus den
+im `pending`-Dict vorhandenen Daten (cid, actor_id/sender, bid); alle vier
+Retry-Zweige rufen jetzt bei Erfolg `_record_contribution(...,
+STATUS_MATERIALIZED/STATUS_REJECTED)` auf, exakt wie der Erstversuchs-Pfad.
+Neue Tests: `tests/test_contribution_dedup.py::
+test_registration_confirmed_on_retry_reaches_materialized`,
+`test_bounty_claim_confirmed_on_retry_reaches_materialized`.
+
+**Fund 2 (als bekannte Einschränkung dokumentiert, nicht code-seitig
+lösbar):** `moltbook_comment_to_event()` hat für `actor_id` keine echte
+Plattform-ID zur Verfügung (Moltbooks API liefert bisher keine) und fällt
+ehrlich auf `author.name` zurück. §E.1 ("unterschiedliche Actor-IDs mit
+gleichem Namen kollidieren nicht") ist damit für GitHub (echte `user.id`)
+tatsächlich gelöst, für Moltbook aber nur mechanisch vorbereitet, nicht
+inhaltlich gelöst — zwei echte Moltbook-Agenten mit gleichem Anzeigenamen
+würden weiterhin kollidieren. In `docs/SPEC.md` §C.1 und §E.1 explizit als
+offene, für diesen Slice akzeptierte Einschränkung ergänzt, statt implizit
+als erledigt geführt zu werden.
+
+Alle 111 Tests grün (109 vorher + 2 neu für Fund 1), keine Schreibzugriffe
+auf echte Repo-Daten (`git status --short data/` leer nach dem Lauf).
