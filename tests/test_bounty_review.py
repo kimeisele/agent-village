@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 import village.bounty_review as br
 import village.heartbeat as hb
 from village.contracts import ContractState, SuccessCriterion
@@ -418,7 +420,6 @@ def test_invalid_decision_string_raises_value_error(monkeypatch, tmp_path):
     _claim("SomeAgent")
     br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
 
-    import pytest
     with pytest.raises(ValueError):
         br.bounty_review("b001", "reviewer-1", "maybe")
 
@@ -444,3 +445,151 @@ def test_duplicate_review_after_already_done_is_rejected(monkeypatch, tmp_path):
 # ── Authority: worker/interpreter cannot reach this module ────────────────
 # (Covered structurally in tests/test_worker_no_write_authority.py --
 # not duplicated here.)
+
+
+# =============================================================================
+# Regression tests, Kim's PR #15 review (docs/research/
+# BOUNTY_REVIEW_GATE_01.md "Corrections" section)
+# =============================================================================
+
+
+# ── Blocker 1: submissions are immutable, never overwritten ──────────────
+
+
+def test_resubmit_of_the_same_execution_after_reject_does_not_overwrite_the_first_record(monkeypatch, tmp_path):
+    """The exact scenario from the review: submit -> reject -> claimed ->
+    submit (SAME execution_id). Both records must exist afterwards, and
+    the first one's reject review must still be intact -- not silently
+    overwritten by the second submit call."""
+    _setup(monkeypatch, tmp_path)
+    _claim("SomeAgent")
+    wr = _succeeded_work_result(execution_id="exec-1")
+
+    first = br.bounty_submit("b001", "SomeAgent", wr)
+    br.bounty_review("b001", "reviewer-1", "reject", evidence={"reason": "not good enough"})
+
+    # Resubmit the SAME execution_id (e.g. a naive retry of the same
+    # work_result object) after the reject.
+    second = br.bounty_submit("b001", "SomeAgent", wr)
+
+    assert second is not None
+    assert second["submission_id"] != first["submission_id"]  # distinct record
+
+    all_submissions = hb._load(br.SUBMISSIONS)["submissions"]
+    assert len(all_submissions) == 2
+
+    first_stored = all_submissions[first["submission_id"]]
+    assert first_stored["review"]["decision"] == "reject"  # preserved, not lost
+    assert first_stored["review"]["evidence"]["reason"] == "not good enough"
+
+    second_stored = all_submissions[second["submission_id"]]
+    assert second_stored["review"] is None  # fresh record, not yet reviewed
+
+
+def test_insert_submission_refuses_to_overwrite_an_existing_id(monkeypatch, tmp_path):
+    """Storage-layer guarantee, independent of bounty_submit()'s own id
+    generation: _insert_submission() itself refuses a duplicate key."""
+    _setup(monkeypatch, tmp_path)
+    submission = {
+        "submission_id": "submission:b001:exec-1", "bounty_id": "b001",
+        "work_result_id": "w", "contract_id": "c", "execution_id": "exec-1",
+        "actor_id": "a", "provider": "p", "model": "m", "status": "succeeded",
+        "output": {}, "evidence": {}, "submitted_at": 0.0, "review": None,
+    }
+    br._insert_submission(submission)
+
+    with pytest.raises(RuntimeError, match="already exists"):
+        br._insert_submission(submission)
+
+
+def test_attach_review_refuses_to_overwrite_an_existing_review(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    _claim("SomeAgent")
+    submission = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
+    br._attach_review(submission["submission_id"], {"decision": "reject", "reviewer_actor_id": "r1"})
+
+    with pytest.raises(RuntimeError, match="already reviewed"):
+        br._attach_review(submission["submission_id"], {"decision": "accept", "reviewer_actor_id": "r2"})
+
+
+def test_multiple_reject_resubmit_cycles_preserve_full_history(monkeypatch, tmp_path):
+    """Not just one reject/resubmit cycle -- three in a row, all three
+    prior records must survive untouched."""
+    _setup(monkeypatch, tmp_path)
+    _claim("SomeAgent")
+    wr = _succeeded_work_result(execution_id="exec-1")
+
+    for i in range(3):
+        br.bounty_submit("b001", "SomeAgent", wr)
+        br.bounty_review("b001", "reviewer-1", "reject", evidence={"attempt": i})
+
+    br.bounty_submit("b001", "SomeAgent", wr)  # final submission, left un-reviewed
+
+    all_submissions = hb._load(br.SUBMISSIONS)["submissions"]
+    assert len(all_submissions) == 4  # 3 rejected + 1 pending
+    rejected = [s for s in all_submissions.values() if s["review"] is not None]
+    assert len(rejected) == 3
+    assert {s["review"]["evidence"]["attempt"] for s in rejected} == {0, 1, 2}
+
+
+# ── Blocker 2: evidence value scanning, not just key filtering ───────────
+
+
+def test_evidence_value_containing_sk_token_is_redacted(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    _claim("SomeAgent")
+    wr = _succeeded_work_result()
+    wr.evidence["notes"] = "debug info: sk-abcdefghij1234567890 was used somewhere"
+
+    result = br.bounty_submit("b001", "SomeAgent", wr)
+
+    assert "sk-abcdefghij1234567890" not in result["evidence"]["notes"]
+    assert "[REDACTED]" in result["evidence"]["notes"]
+
+
+def test_evidence_value_containing_bearer_token_is_redacted(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    _claim("SomeAgent")
+    wr = _succeeded_work_result()
+    wr.evidence["notes"] = "header was Bearer abcdefghij1234567890XYZ"
+
+    result = br.bounty_submit("b001", "SomeAgent", wr)
+
+    assert "abcdefghij1234567890XYZ" not in result["evidence"]["notes"]
+    assert "[REDACTED]" in result["evidence"]["notes"]
+
+
+def test_evidence_value_containing_authorization_header_is_redacted(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    _claim("SomeAgent")
+    wr = _succeeded_work_result()
+    wr.evidence["notes"] = "saw this in a log: Authorization: Basic dXNlcjpwYXNz"
+
+    result = br.bounty_submit("b001", "SomeAgent", wr)
+
+    assert "dXNlcjpwYXNz" not in result["evidence"]["notes"]
+    assert "[REDACTED]" in result["evidence"]["notes"]
+
+
+def test_evidence_value_redaction_applies_inside_nested_structures(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    _claim("SomeAgent")
+    wr = _succeeded_work_result()
+    wr.evidence["phase_log"] = [{"note": "leaked sk-nestedvalue1234567890 here"}]
+
+    result = br.bounty_submit("b001", "SomeAgent", wr)
+
+    assert "sk-nestedvalue1234567890" not in str(result["evidence"])
+    assert "[REDACTED]" in result["evidence"]["phase_log"][0]["note"]
+
+
+def test_evidence_value_without_secret_pattern_is_left_unchanged(monkeypatch, tmp_path):
+    """The redaction must not be so aggressive it mangles ordinary text."""
+    _setup(monkeypatch, tmp_path)
+    _claim("SomeAgent")
+    wr = _succeeded_work_result()
+    wr.evidence["notes"] = "This is a perfectly ordinary analysis note about heartbeat.py."
+
+    result = br.bounty_submit("b001", "SomeAgent", wr)
+
+    assert result["evidence"]["notes"] == "This is a perfectly ordinary analysis note about heartbeat.py."

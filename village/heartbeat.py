@@ -116,8 +116,19 @@ def _load(p: Path) -> dict:
 
 
 def _save(p: Path, d):
+    """Write-to-temp-then-atomic-replace (docs/research/
+    BOUNTY_REVIEW_GATE_01.md Blocker 3): protects each individual file
+    against a process crash mid-write leaving behind truncated/corrupt
+    JSON. `Path.replace()` is an atomic rename on POSIX. This does NOT
+    make a multi-file sequence (e.g. bounty_review()'s submission ->
+    contract -> bounty writes) atomic as a whole -- that remains a
+    documented, accepted limitation -- but it does eliminate the worse
+    failure mode of a single half-written file that won't even parse.
+    """
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(d, indent=2))
+    tmp = p.with_name(f"{p.name}.tmp{os.getpid()}")
+    tmp.write_text(json.dumps(d, indent=2))
+    tmp.replace(p)
 
 
 def _api(url, token=None, body=None, method="GET"):

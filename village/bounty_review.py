@@ -24,6 +24,7 @@ never by the cognitive worker itself.
 
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -51,13 +52,38 @@ SUBMISSIONS = DIR / "bounty_submissions.json"
 _EVIDENCE_BANNED_KEY_SUBSTRINGS = ("api_key", "secret", "authorization", "bearer", "raw", "token")
 _EVIDENCE_MAX_STRING_LEN = 4_000
 
+# Kim's PR #15 review, Blocker 2: key-based filtering alone doesn't stop
+# a model from echoing a secret-shaped VALUE back inside an otherwise
+# innocuously-named field (e.g. evidence["notes"] containing a stray
+# "sk-..." token). These patterns are checked against every string
+# value, not just ones under a suspicious key, and redacted in place --
+# never dropped silently, so a reviewer can see redaction happened.
+_SECRET_VALUE_PATTERNS = (
+    re.compile(r"sk-[A-Za-z0-9_-]{10,}"),
+    re.compile(r"[Bb]earer\s+[A-Za-z0-9._-]{10,}"),
+    # "Authorization: <scheme> <token>" -- consumes up to a few
+    # whitespace-separated tokens after the colon (covers "Basic
+    # <base64>", "Bearer <token>", etc.), not just the first one (a real
+    # bug found in testing: `\S+` alone left the actual credential
+    # token exposed right after a redacted scheme word).
+    re.compile(r"[Aa]uthorization\s*:\s*\S+(?:\s+\S+){0,3}"),
+)
+_REDACTED = "[REDACTED]"
+
+
+def _redact_secret_patterns(value: str) -> str:
+    for pattern in _SECRET_VALUE_PATTERNS:
+        value = pattern.sub(_REDACTED, value)
+    return value
+
 
 def _safe_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
     """Defense in depth before persisting evidence as part of a bounty
-    submission: strips any key that looks credential-shaped and caps
-    string length. `WorkResult.evidence` for a SUCCEEDED result only
-    ever contains `{target_file, instruction, phase_log}` today (no raw
-    provider payload is ever attached on success -- see
+    submission: strips any KEY that looks credential-shaped, redacts any
+    string VALUE that matches a known secret pattern regardless of its
+    key, and caps string length. `WorkResult.evidence` for a SUCCEEDED
+    result only ever contains `{target_file, instruction, phase_log}`
+    today (no raw provider payload is ever attached on success -- see
     village/worker.py), but this normalizer does not trust that by
     convention alone; it re-checks structurally every time."""
 
@@ -70,8 +96,11 @@ def _safe_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
             }
         if isinstance(value, list):
             return [_clean(v) for v in value]
-        if isinstance(value, str) and len(value) > _EVIDENCE_MAX_STRING_LEN:
-            return value[:_EVIDENCE_MAX_STRING_LEN] + "...[truncated]"
+        if isinstance(value, str):
+            cleaned = _redact_secret_patterns(value)
+            if len(cleaned) > _EVIDENCE_MAX_STRING_LEN:
+                cleaned = cleaned[:_EVIDENCE_MAX_STRING_LEN] + "...[truncated]"
+            return cleaned
         return value
 
     return _clean(evidence)
@@ -88,16 +117,66 @@ def _load_submissions() -> dict:
     return _load(SUBMISSIONS)
 
 
-def _save_submission(submission: dict) -> None:
+def _get_submission(submission_id: str) -> dict | None:
+    return _load_submissions().get("submissions", {}).get(submission_id)
+
+
+def _next_submission_id(bounty_id: str, execution_id: str) -> str:
+    """Always returns a fresh, never-before-used submission id (docs/
+    research/BOUNTY_REVIEW_GATE_01.md Blocker 1). The common case (an
+    execution submitted for the first time) keeps the plain
+    `submission:<bounty_id>:<execution_id>` form; if that id is somehow
+    already taken (the same execution resubmitted after a reject, or a
+    defensive edge case), a numbered revision suffix is used instead --
+    the previous record, and its review if any, is never overwritten."""
     store = _load_submissions()
     submissions = store.get("submissions", {})
+    base = f"submission:{bounty_id}:{execution_id}"
+    if base not in submissions:
+        return base
+    revision = 2
+    while f"{base}:r{revision}" in submissions:
+        revision += 1
+    return f"{base}:r{revision}"
+
+
+def _insert_submission(submission: dict) -> None:
+    """Immutable insert: refuses to overwrite an existing submission_id.
+    The ONLY way a new submission record enters storage -- callers must
+    obtain a guaranteed-fresh id from `_next_submission_id()` first, and
+    this function double-checks it at the storage layer, so a caller bug
+    elsewhere can't silently destroy audit history."""
+    store = _load_submissions()
+    submissions = store.get("submissions", {})
+    if submission["submission_id"] in submissions:
+        raise RuntimeError(
+            f"submission {submission['submission_id']!r} already exists -- "
+            "audit records are immutable; this should be unreachable"
+        )
     submissions[submission["submission_id"]] = submission
     store["submissions"] = submissions
     _save(SUBMISSIONS, store)
 
 
-def _get_submission(submission_id: str) -> dict | None:
-    return _load_submissions().get("submissions", {}).get(submission_id)
+def _attach_review(submission_id: str, review_record: dict) -> dict:
+    """Attach a review verdict to an existing submission -- the one
+    legitimate in-place update this module makes, and only once: refuses
+    if the submission already has a review (defense in depth on top of
+    the status-based gating in `bounty_review()`, which should already
+    make a double-review unreachable)."""
+    store = _load_submissions()
+    submissions = store.get("submissions", {})
+    existing = submissions.get(submission_id)
+    if existing is None:
+        raise KeyError(f"no submission {submission_id!r} to attach a review to")
+    if existing.get("review") is not None:
+        raise RuntimeError(f"submission {submission_id!r} was already reviewed -- refusing to overwrite the review")
+    updated = dict(existing)
+    updated["review"] = review_record
+    submissions[submission_id] = updated
+    store["submissions"] = submissions
+    _save(SUBMISSIONS, store)
+    return updated
 
 
 # ── Submission ────────────────────────────────────────────────────────────
@@ -146,7 +225,7 @@ def bounty_submit(bounty_id: str, actor_id: str, work_result: WorkResult) -> dic
         return None
 
     # All validation above is read-only. First write happens here.
-    submission_id = f"submission:{bounty_id}:{work_result.execution_id}"
+    submission_id = _next_submission_id(bounty_id, work_result.execution_id)
     submission = {
         "submission_id": submission_id,
         "bounty_id": bounty_id,
@@ -162,7 +241,7 @@ def bounty_submit(bounty_id: str, actor_id: str, work_result: WorkResult) -> dic
         "submitted_at": time.time(),
         "review": None,
     }
-    _save_submission(submission)
+    _insert_submission(submission)
 
     bounty["status"] = "submitted"
     bounty["current_submission_id"] = submission_id
@@ -234,11 +313,12 @@ def bounty_review(
 
     if decision == "reject":
         # Contract untouched -- validation above is the only
-        # precondition. Submission (with its review outcome attached)
-        # is preserved, not deleted or overwritten by a later resubmit
-        # (each execution gets its own submission_id).
-        submission["review"] = review_record
-        _save_submission(submission)
+        # precondition. Submission (with its review outcome attached via
+        # _attach_review(), an in-place update of THIS record only) is
+        # preserved, not deleted or overwritten by a later resubmit --
+        # _next_submission_id() guarantees the next submit() gets its own
+        # fresh id.
+        _attach_review(submission_id, review_record)
 
         bounty["status"] = "claimed"
         _save(heartbeat.BOUNTIES, board)
@@ -252,8 +332,7 @@ def bounty_review(
     except ValueError:
         return None
 
-    submission["review"] = review_record
-    _save_submission(submission)
+    _attach_review(submission_id, review_record)
     _save_contract(contract)
 
     bounty["status"] = "done"

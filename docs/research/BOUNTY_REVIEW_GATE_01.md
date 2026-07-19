@@ -222,3 +222,99 @@ This is the first time in the project a `WorkResult` produced by
 `village/worker.py` (PR #13/#14) can lead anywhere at all beyond sitting
 in `contracts.json` -- the review gate is that path, deliberately still
 requiring a human/explicit decision at its one authority-bearing step.
+
+## Corrections (Kim's independent review of PR #15)
+
+Three real, non-stylistic issues found; no architecture change made to
+address them -- all three are fixes within the existing design.
+
+### Blocker 1 — submissions were not actually immutable
+
+`submission_id = f"submission:{bounty_id}:{execution_id}"` plus an
+upserting `_save_submission()` meant a `submit -> reject -> claimed ->
+submit` cycle for the *same* `execution_id` (e.g. a naive retry with the
+same `WorkResult`) would silently overwrite the first record -- losing
+exactly the reject review the design claimed to preserve.
+
+Fixed by splitting storage into two operations:
+- `_next_submission_id()` always returns a fresh id -- the common case
+  keeps the plain `submission:<bounty_id>:<execution_id>` form; a
+  same-execution resubmit gets a numbered revision suffix (`:r2`, `:r3`,
+  ...) instead of colliding.
+- `_insert_submission()` is insert-only: raises `RuntimeError` if the id
+  already exists, at the storage layer, not just relying on the caller
+  computing a fresh one correctly.
+- `_attach_review()` is the one legitimate in-place update (adding a
+  review verdict to an unreviewed submission) -- it refuses to run twice
+  on the same record (`RuntimeError` if `review` is already set).
+
+Regression tests: `test_resubmit_of_the_same_execution_after_reject_
+does_not_overwrite_the_first_record` (the exact scenario from the
+review), `test_multiple_reject_resubmit_cycles_preserve_full_history`
+(three cycles, not just one), plus direct storage-layer tests for both
+new guard functions.
+
+### Blocker 2 — evidence filtering only checked keys, not values
+
+`_safe_evidence()` stripped credential-*shaped keys* but did nothing if
+a model happened to echo a secret-*shaped value* back under an
+innocuous key (e.g. `evidence["notes"]` containing a stray `sk-...`
+token).
+
+Fixed: every string value (not just ones under a suspicious key) is now
+scanned against `_SECRET_VALUE_PATTERNS` (`sk-...`, `Bearer <token>`,
+`Authorization: <scheme> <token>`) and redacted to `[REDACTED]` in
+place, recursively through nested dicts/lists, before the length cap is
+applied. Real bug caught while testing this fix itself: the
+`Authorization:` pattern originally matched only one whitespace-
+delimited token after the colon, leaving the actual credential exposed
+right after a redacted scheme word (`Authorization: [REDACTED]
+dXNlcjpwYXNz`) -- widened to consume up to a few tokens after the colon.
+
+Regression tests: one per pattern (`sk-`, `Bearer`, `Authorization:`),
+one proving redaction reaches nested structures (`phase_log` entries),
+one proving ordinary text without a secret pattern is left byte-for-byte
+unchanged (the redaction must not be so aggressive it mangles normal
+evidence).
+
+### Blocker 3 — no protection against a single corrupted JSON file
+
+`village/heartbeat.py::_save()` wrote directly to the target path.
+A process crash mid-write could leave a truncated file that doesn't even
+parse as JSON on the next read -- worse than the already-accepted
+multi-file-sequence limitation, and avoidable with a small, standard
+fix.
+
+Fixed: `_save()` now writes to a `<name>.tmp<pid>` file in the same
+directory, then `Path.replace()`s it onto the target -- atomic on POSIX.
+This is a change to the one shared `_save()` used by every JSON write in
+`village/heartbeat.py` (bounties, pokedex, contracts, contributions,
+etc.), not just the bounty-review path, so the protection is universal,
+not bolted on locally. The cross-file-sequence limitation (submission ->
+contract -> bounty writes are still three separate atomic single-file
+writes, not one transaction) remains, documented above, and was
+explicitly accepted by Kim as out of scope for "no new database, no
+architecture change."
+
+Regression tests (new file, `tests/test_atomic_save.py`): a simulated
+write failure (monkeypatched `Path.write_text`) leaves an existing
+target file byte-for-byte unchanged, and leaves no file at all for a
+target that didn't exist yet -- either way, never a half-written,
+unparseable file. Plus a check that a successful save leaves no stray
+`.tmp*` files behind, and a plain round-trip sanity check.
+
+### Result
+
+```
+$ python3 -m pytest tests/ -q
+........................................................................ [ 27%]
+........................................................................ [ 54%]
+........................................................................ [ 82%]
+..............................................                           [100%]
+262 passed in 4.40s
+```
+249 (PR #15 as originally opened) + 13 new (9 in `test_bounty_review.py`
+covering Blockers 1/2, 4 in the new `test_atomic_save.py` covering
+Blocker 3). No regressions, no real API call anywhere, `git status
+--short data/` clean after the local run. No new feature, no scope
+expansion beyond the three requested corrections.
