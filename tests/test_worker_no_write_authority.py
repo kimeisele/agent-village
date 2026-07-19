@@ -40,6 +40,18 @@ def test_worker_source_never_calls_fulfill_or_bounty_complete():
     assert "bounty_complete" not in calls
 
 
+def test_worker_source_never_calls_bounty_submit_or_bounty_review():
+    """docs/research/BOUNTY_REVIEW_GATE_01.md: the review gate adds two
+    more authority-carrying functions (bounty_submit/bounty_review) --
+    the worker must not be able to reach either. bounty_submit() is a
+    legitimate thing SOME orchestration layer calls with a worker's
+    WorkResult, but that orchestration explicitly lives outside
+    village/worker.py/village/interpreter.py, never inside them."""
+    calls = _call_names(inspect.getsource(worker))
+    assert "bounty_submit" not in calls
+    assert "bounty_review" not in calls
+
+
 def _imported_module_names(source: str) -> set[str]:
     tree = ast.parse(source)
     names = set()
@@ -63,6 +75,19 @@ def test_worker_module_does_not_import_heartbeat():
     assert not any(m.startswith("village.heartbeat") for m in imports)
 
 
+def test_worker_module_does_not_import_bounty_review():
+    """village/bounty_review.py owns bounty_submit()/bounty_review();
+    the worker must not be able to reach either via import."""
+    imports = _imported_module_names(inspect.getsource(worker))
+    assert not any(m.startswith("village.bounty_review") for m in imports)
+
+
+def test_interpreter_module_does_not_import_heartbeat_or_bounty_review():
+    imports = _imported_module_names(inspect.getsource(interpreter))
+    assert not any(m.startswith("village.heartbeat") for m in imports)
+    assert not any(m.startswith("village.bounty_review") for m in imports)
+
+
 def test_worker_module_has_no_subprocess_or_shell_execution():
     """No code path in the worker may execute anything the provider
     returns -- verified by absence of any shell/process/eval facility in
@@ -79,6 +104,12 @@ def test_interpreter_module_also_never_calls_fulfill_or_bounty_complete():
     calls = _call_names(inspect.getsource(interpreter))
     assert "fulfill" not in calls
     assert "bounty_complete" not in calls
+
+
+def test_interpreter_module_also_never_calls_bounty_submit_or_bounty_review():
+    calls = _call_names(inspect.getsource(interpreter))
+    assert "bounty_submit" not in calls
+    assert "bounty_review" not in calls
 
 
 def test_interpreter_module_has_no_subprocess_or_shell_execution():

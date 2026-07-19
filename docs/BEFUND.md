@@ -1988,3 +1988,108 @@ geprüft, nicht nur einen), weiterhin keine Repo-Schreibrechte.
 **Nächster Schritt:** zweiter echter Live-Lauf, gleicher Analyseauftrag
 (`village/heartbeat.py`), nach grünem CI und Kims Review — Befund folgt
 in einem eigenen Abschnitt.
+
+---
+
+## §32 — Cognitive-Worker-Bogen abgeschlossen: erster Live-Lauf → Root Cause → PR #14 → zweiter Live-Lauf (2026-07-19)
+
+Zusammenfassender, abschließender Eintrag zum gesamten Bogen von §30/§31
+— hier alle Fakten an einem Ort, append-only, keine bestehenden
+Abschnitte verändert.
+
+### Erster Live-Lauf (Run 29690201109) — ehrliches `INVALID_OUTPUT`
+
+Nach Merge von PR #13 (§30) manuell ausgelöst gegen `village/heartbeat.py`.
+Ergebnis: `status: "invalid_output"`, `error: "output is not valid JSON:
+Expecting value: line 1 column 1 (char 0)"`. `completion_tokens: 2000`
+— exakt am damaligen `max_tokens`-Limit. Budget nicht überschritten
+(`exceeded_dimensions: []`), Kosten $0.00132, 22,5s. Kein Secret-Leak
+(Rohlog geprüft: einzige Fundstelle die von GitHub selbst maskierte
+`DEEPSEEK_API_KEY: ***`-Zeile). Ehrlich als Fehlschlag berichtet, nicht
+schöngeredet — genau der in PR #13 vorgesehene, gültige
+Proof-Ausgang.
+
+### Root Cause (verifiziert gegen DeepSeeks Primärdokumentation)
+
+Direkt gegen `https://api-docs.deepseek.com/api/create-chat-completion`
+und `https://api-docs.deepseek.com/guides/thinking_mode` geprüft:
+`deepseek-v4-flash` hat Thinking-Mode standardmäßig aktiviert; Reasoning
+landet in einem vom sichtbaren `content` getrennten
+`message.reasoning_content`-Feld. Das alte One-Shot-Modell
+(`village/worker.py` v1, PR #13) kannte dieses Feld nicht und wertete
+leeren `content` vorschnell als leere Antwort — tatsächlich hatte das
+Modell nur seinen gesamten Token-Rahmen mit Reasoning verbraucht, bevor
+es zur sichtbaren Endantwort kam (`finish_reason: "length"`).
+
+### PR #14 — Umbau zum begrenzten Agent Loop
+
+`village/worker.py` umgebaut zu `GENERATE → INTERPRET → EVALUATE →
+optional REPAIR (Obergrenze) → FINISHED`; `village/cognitive_provider.py`
+liefert jetzt volle `CognitiveResponse` (`visible_text`,
+`reasoning_text`, `finish_reason`, Usage inkl. `reasoning_tokens`);
+neues `village/interpreter.py` (drei Stufen: Marker-Extraktion,
+toleranter Parser, ein einzelner, strikt reformatierender
+Interpretations-Call). Neue harte Konstanten:
+`MAX_REPAIR_ATTEMPTS = 2`, `MAX_LLM_CALLS_PER_EXECUTION = 4`. Details:
+`docs/research/AGENT_LOOP_WORKER_02.md`, BEFUND §31.
+
+### Zweiter Live-Lauf (Run 29691336561) — `SUCCEEDED`
+
+Ausgelöst gegen `main` (Merge-Commit `02fc7f3ab8fe57e33db9eff59fcb75db5d00b3f0`),
+`target_file=village/heartbeat.py`, `model=deepseek-v4-flash`.
+
+```json
+{
+  "status": "succeeded",
+  "usage": {
+    "prompt_tokens": 5436,
+    "completion_tokens": 424,
+    "reasoning_tokens": 0,
+    "total_tokens": 5860,
+    "cost_usd": 0.00087976,
+    "duration_seconds": 4.177069799000002
+  },
+  "phase_log": [
+    {"phase": "generate", "attempt": 0, "finish_reason": "stop", "has_visible_text": true, "has_reasoning_text": false},
+    {"phase": "evaluate", "result": "accepted"}
+  ]
+}
+```
+
+Ein einziger Provider-Aufruf (kein Repair, kein Interpretations-Call
+nötig), `reasoning_tokens: 0` (Thinking-Mode korrekt deaktiviert),
+Budget bei Weitem nicht ausgeschöpft (Limits: 40.000 Tokens/$0.05/180s).
+Ergebnis: 5 strukturell valide, code-referenzierte Gaps zu
+`village/heartbeat.py` (u. a. `REG_POST`-Fehlerbehandlung,
+`_retry_suffix`, `_post_comment_verified`, `_load_challenge_monitor_state`,
+`_parse_contract_terms`).
+
+**Sicherheitsgrenzen bestätigt (unabhängig von Kim gegengeprüft, nicht
+nur behauptet):** vollständiger Rohlog durchsucht (`DEEPSEEK_API_KEY`,
+`sk-`-Präfixe, `Bearer`/`Authorization`, alle 24+-stelligen
+alphanumerischen Strings) — einzige Fundstelle die von GitHub selbst
+maskierte `DEEPSEEK_API_KEY: ***`-Zeile, kein Schlüsselwert irgendwo im
+Log oder Artifact. Keine Schreibautorität (`permissions: contents:
+read`, kein Commit/Push/PR entstanden). Kein `fulfill()`/
+`bounty_complete()`-Aufruf.
+
+### Was jetzt bewiesen ist — und was nicht
+
+**Bewiesen:** der vollständige produktive Cognitive-Pfad funktioniert
+end-to-end und wiederholbar — `VillageContract` → begrenzte
+Worker-Execution (echter DeepSeek-Call, mehrfach-call-fähig, budget- und
+call-cap-begrenzt) → volle `CognitiveResponse` → dreistufige
+Interpretation → strukturell validiertes `WorkResult` → nicht-geheimes
+Evidence-Artefakt. Strukturell gültige Arbeitserzeugung ist real, nicht
+nur unit-getestet.
+
+**Nicht bewiesen:** die fachliche Qualität der Analyse — dass die
+gefundenen 5 Gaps inhaltlich korrekt/vollständig/nützlich sind, wurde
+nicht unabhängig geprüft (Zeilennummern insbesondere nicht verifiziert).
+Der Worker validiert bewusst nur Struktur, nie Inhalt (SPEC.md §A.5).
+
+**Noch nicht vorhanden:** jede Review- und Fulfillment-Entscheidung. Kein
+Code-Pfad liest ein `SUCCEEDED`-`WorkResult` und entscheidet, ob es den
+Bounty/Contract erfüllt — das bleibt der nächste, hier bewusst noch
+nicht begonnene Schritt (siehe PR #13/#14-Berichte, "kleinster
+sinnvoller nächster Schritt": ein manueller Review-Gate).

@@ -3,6 +3,12 @@ Tests for the bounty_claim()/bounty_complete() <-> village/contracts.py
 wiring (docs/SPEC.md §C.3.1, docs/research/VILLAGE_CONTRACTS_01.md
 follow-up slice). bounty_create() is deliberately NOT wired -- nothing
 calls it in production, so it's out of scope here.
+
+bounty_complete()'s behavior was narrowed by docs/research/
+BOUNTY_REVIEW_GATE_01.md: it no longer moves a bounty from claimed to
+done under any circumstance (see test_complete_no_longer_moves_claimed_
+to_done below) -- that authority moved to village/bounty_review.py,
+tested in tests/test_bounty_review.py.
 """
 
 from __future__ import annotations
@@ -48,21 +54,33 @@ def test_claim_creates_and_activates_contract(monkeypatch, tmp_path):
     assert contract.deadline is None
 
 
-def test_complete_fulfills_the_contract(monkeypatch, tmp_path):
+def test_complete_no_longer_moves_claimed_to_done(monkeypatch, tmp_path, capsys):
+    """Superseded by docs/research/BOUNTY_REVIEW_GATE_01.md: since the
+    submit/review gate (village/bounty_review.py) exists, no normal
+    path -- including this legacy function -- may move a bounty
+    directly from claimed to done anymore. Real completion now goes
+    through bounty_submit()+bounty_review(..., decision="accept"),
+    tested in tests/test_bounty_review.py."""
     _setup(monkeypatch, tmp_path)
     hb.bounty_claim("b001", "SomeAgent")
 
     result = hb.bounty_complete("b001")
-    assert result is not None
-    assert result["status"] == "done"
 
+    assert result is None
+    board = hb._load(hb.BOUNTIES)
+    assert board["bounties"][0]["status"] == "claimed"  # unchanged
     contract = hb._load_contract("contract:b001:1")
-    assert contract.state == ContractState.FULFILLED
+    assert contract.state == ContractState.ACTIVE  # unchanged, not fulfilled
+    captured = capsys.readouterr()
+    assert "refused" in captured.out
 
 
-def test_complete_with_no_matching_contract_is_skipped_cleanly(monkeypatch, tmp_path, capsys):
-    """Simulates a bounty claimed before this wiring existed: status is
-    "claimed" but no contracts.json entry exists for it. Must not crash."""
+def test_complete_on_bounty_claimed_before_this_wiring_existed_also_refused(monkeypatch, tmp_path):
+    """Simulates a bounty claimed before any contract wiring existed:
+    status is "claimed" but no contracts.json entry exists for it.
+    Still refused (not a crash, not a completion) -- the legacy path is
+    closed unconditionally now, independent of whether a contract
+    exists."""
     _setup(monkeypatch, tmp_path)
     board = hb._load(hb.BOUNTIES)
     board["bounties"][0]["status"] = "claimed"
@@ -72,10 +90,9 @@ def test_complete_with_no_matching_contract_is_skipped_cleanly(monkeypatch, tmp_
 
     result = hb.bounty_complete("b001")
 
-    assert result is not None
-    assert result["status"] == "done"
-    captured = capsys.readouterr()
-    assert "no contract for b001" in captured.out
+    assert result is None
+    board = hb._load(hb.BOUNTIES)
+    assert board["bounties"][0]["status"] == "claimed"  # unchanged
 
 
 def test_claim_reuses_existing_contract_instead_of_recreating(monkeypatch, tmp_path):
@@ -232,44 +249,14 @@ def test_partial_contract_terms_subfields_are_all_optional(monkeypatch, tmp_path
     assert contract.success_criteria == []
 
 
-def test_complete_with_unmet_required_criterion_leaves_contract_active(monkeypatch, tmp_path, capsys):
-    """No success-criteria evaluator exists -- fulfill() must NOT be
-    called when a required criterion's `met` is not True, and the
-    contract must NOT be silently marked fulfilled. The bounty itself
-    still moves to "done" (unchanged bounty_complete() semantics from
-    PR #11) -- only the contract's own state differs here."""
-    _setup(monkeypatch, tmp_path)
-    _set_contract_terms(monkeypatch, tmp_path, _VALID_TERMS)
-    hb.bounty_claim("b001", "SomeAgent")
-
-    result = hb.bounty_complete("b001")
-
-    assert result is not None
-    assert result["status"] == "done"  # bounty still marked done
-    contract = hb._load_contract("contract:b001:1")
-    assert contract.state == ContractState.ACTIVE  # NOT fulfilled
-    captured = capsys.readouterr()
-    assert "unverified required success criteria" in captured.out
-    assert "review_posted" in captured.out
-
-
-def test_complete_with_met_required_criterion_fulfills_contract(monkeypatch, tmp_path):
-    """Symmetric case: if the required criterion happens to already be
-    marked met=True (e.g. set by some future external process directly
-    on contracts.json -- not something this slice adds a way to do),
-    fulfill() proceeds normally."""
-    _setup(monkeypatch, tmp_path)
-    _set_contract_terms(monkeypatch, tmp_path, _VALID_TERMS)
-    hb.bounty_claim("b001", "SomeAgent")
-
-    contract = hb._load_contract("contract:b001:1")
-    contract.success_criteria[0].met = True
-    hb._save_contract(contract)
-
-    hb.bounty_complete("b001")
-
-    contract = hb._load_contract("contract:b001:1")
-    assert contract.state == ContractState.FULFILLED
+# Success-criteria-vs-fulfillment behavior (unmet required criterion
+# blocks fulfillment; a met one allows it) moved to the review gate --
+# see tests/test_bounty_review.py::
+# test_accept_with_unmet_required_criterion_is_refused and
+# ::test_accept_with_met_required_criterion_fulfills_contract. Not
+# re-tested here since bounty_complete() no longer reaches that logic
+# at all (test_complete_no_longer_moves_claimed_to_done above covers
+# its new, narrow behavior completely).
 
 
 def test_contract_terms_json_roundtrip_on_the_bounty_record(monkeypatch, tmp_path):
