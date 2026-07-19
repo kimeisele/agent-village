@@ -1776,3 +1776,112 @@ fertig, hier der Beleg" — ohne die wäre ein Review-State oder ein
 Reputation-Tier nur eine weitere Schicht ohne echten Input. Details:
 `docs/research/VILLAGE_CONTRACTS_01.md`, Abschnitt "Contract terms
 ingress".
+
+---
+
+## §30 — Internal Worker Proof 01: erste echte LLM-Ausführung, Code gemergt, NICHT scharfgeschaltet (2026-07-19)
+
+Sicherheitskritischer Slice. Vollständiger Bericht:
+`docs/research/INTERNAL_WORKER_PROOF_01.md`. Hier nur der BEFUND-übliche
+Kurzstand.
+
+**Schritt 0 — Modellverifikation vor dem Schreiben des HTTP-Calls:**
+direkt gegen `https://api-docs.deepseek.com/quick_start/pricing/` und
+`https://api-docs.deepseek.com/updates/` geprüft (nicht nur
+Sekundärquelle übernommen). Bestätigt: `deepseek-v4-flash` und
+`deepseek-v4-pro` sind die aktuellen Modelle; `deepseek-chat`/
+`deepseek-reasoner` (weiterhin von `moltbook_captcha.py::_deepseek_solve()`
+genutzt, unverändert, außerhalb des Scopes dieses Slices) werden am
+2026-07-24 15:59 UTC eingestellt — 5 Tage nach diesem Eintrag.
+`deepseek-v4-flash` gewählt: günstiger, ausreichend für die flache
+Analyseaufgabe von Proof 1, nicht von der Deprecation betroffen.
+
+**Neue Module (alle stdlib-only, keine externe Dependency):**
+- `village/cognitive_provider.py` — neutrale `CognitiveProvider`-
+  Schnittstelle (ABC), Fehlerhierarchie (`ProviderAuthError`/
+  `ProviderTimeoutError`/`ProviderRateLimitError`/`ProviderHTTPError`/
+  `ProviderResponseError`), keine DeepSeek-Spezifika.
+- `village/deepseek_provider.py` — konkreter Adapter, `urllib.request`,
+  Fehlerbehandlung/Timeout-Muster an `moltbook_captcha.py::
+  _deepseek_solve()` orientiert (referenziert, nicht kopiert — anderer
+  Zweck). Kein Retry (siehe unten).
+- `village/work_result.py` — neutrales, JSON-natives `WorkResult`-Schema
+  (`work_result_id`/`contract_id`/`execution_id`/`provider`/`model`/
+  `status`/`output`/`evidence`/`usage`/`started_at`/`finished_at`/
+  `error`/`schema_version`), Status ∈ `succeeded | failed |
+  budget_exceeded | invalid_output | provider_error`.
+- `village/worker.py` — Orchestrierung für genau einen Contract: lädt
+  Work Order, ruft Provider im Budget auf, validiert NUR Struktur (nie
+  Qualität), erzeugt WorkResult. Ruft nie `fulfill()`/`bounty_complete()`
+  — erzwungen und geprüft per AST-Analyse des eigenen Quelltexts
+  (`tests/test_worker_no_write_authority.py`; ein naiver Substring-Grep
+  scheiterte an den eigenen erklärenden Docstrings, die "fulfill"/
+  "bounty_complete" in Prosa erwähnen — deshalb `ast.walk()` auf echte
+  Call-Knoten statt String-Suche).
+- `scripts/worker_proof_01.py` — Treiber für den Proof-Workflow. Baut
+  seinen `VillageContract` **nur im Speicher**, nie aus
+  `data/village/contracts.json` geladen oder dorthin gespeichert — der
+  Proof kann auch bei wiederholtem Lauf keinen echten Bounty/Contract-
+  Zustand mutieren.
+- `.github/workflows/worker-proof-01.yml` — **nur** `workflow_dispatch`,
+  `permissions: contents: read`, kein `push`/`pull_request`/
+  `pull_request_target`, `timeout-minutes: 5`, Evidence-Artifact
+  `retention-days: 7`. Secret `DEEPSEEK_API_KEY` existiert nicht als
+  Repo-Secret — Workflow ist gemergt, aber technisch nicht ausführbar
+  ohne separate, spätere Einrichtung.
+
+**Budget/Fehlerverhalten:** genau ein Provider-Aufruf pro Ausführung
+(`provider.calls == 1`, testgeprüft); kein Retry bei ungültigem Inhalt;
+kein technischer Retry implementiert (bewusst — die Vorgabe "max. 1
+API-Aufruf" hat Vorrang, Resilienz-Retry bleibt offene Frage für
+später). Echte Usage wird sofort gegen das Contract-Budget geprüft, eine
+Budgetüberschreitung verwirft auch ein strukturell einwandfreies
+Ergebnis. Fehlendes `DEEPSEEK_API_KEY` wirft `ProviderAuthError` **vor**
+jedem Netzwerkaufruf — nie ein Fake-Erfolg.
+
+**Secret-Absicherung:** `DEEPSEEK_API_KEY` erscheint zur Laufzeit nur im
+`Authorization`-Header des ausgehenden Requests. Alle Fehlerpfade
+(HTTP-Fehler, Auth-Fehler, malformed Response) explizit getestet, dass
+der Schlüssel nie in einer Exception-Message, einem Log oder dem
+`ProviderResponse`-Objekt auftaucht — inklusive des HTTPError-Body-
+Parsing-Pfads, der nur DeepSeeks eigenes `error.message`-Feld
+durchreicht, nie den rohen Response-Body.
+
+**Tests:** 5 neue Dateien, 46 neue Tests insgesamt
+(`test_worker_no_write_authority.py` 3, `test_worker.py` 17,
+`test_deepseek_provider.py` 12, `test_work_result.py` 5,
+`test_worker_proof_script.py` 2 — plus indirekt durch bestehende
+`village/contracts.py`-Nutzung). Kein echter API-Call in irgendeinem
+Test — injizierbarer Transport (`FakeProvider`) bzw. gemockter
+`urllib.request.urlopen`. Lokal ausgeführt:
+
+```
+$ python3 -m pytest tests/ -q
+........................................................................ [ 37%]
+........................................................................ [ 75%]
+................................................                         [100%]
+192 passed in 1.73s
+```
+146 bestehend + 46 neu, keine Regression, `git status --short data/` nach
+dem Lauf leer.
+
+**SPEC.md §D:** zweite, engere Ausnahme neben der bereits dokumentierten
+Captcha-LLM-Ausnahme ergänzt — `village/worker.py` ist Cognition, aber
+speist nie eine Contribution, klassifiziert nie Ingress-Content, kann
+strukturell weder Contract noch Bounty selbst erfüllen.
+
+**Was dieser Proof ausdrücklich NICHT tut:** keine Shell-Ausführung von
+Modell-Output, keine Repo-Schreibzugriffe (workflow-seitig durch
+`permissions: contents: read` erzwungen, nicht nur durch
+Anwendungslogik), keine autonomen Folgeaufträge, kein
+Reputation-Tier-Wechsel, kein automatisches `fulfill()`/
+`bounty_complete()`, kein Zugriff auf ein anderes Secret als
+`DEEPSEEK_API_KEY`, keine Aktivierung durch irgendetwas außer einem
+Menschen, der `workflow_dispatch` manuell auslöst.
+
+**Nächster sinnvoller Schritt** (nicht Teil dieses Slices, Kims
+Entscheidung): ein manueller Review-Schritt, der ein `SUCCEEDED`-
+WorkResult liest, von einem Menschen bewerten lässt und erst dann,
+separat vom Worker-Code, `SuccessCriterion.met = True` setzt und
+`contract.fulfill()` aufruft — schließt den hier bewusst offen
+gelassenen Kreis, ohne das Modell je selbst-autorisierend zu machen.
