@@ -1,0 +1,36 @@
+{
+  "allowed_resources": [
+    "Read",
+    "Grep"
+  ],
+  "budget": {
+    "cognitive_units": null,
+    "cost_usd": 0.5,
+    "time_seconds": 3600,
+    "tokens": 20000,
+    "used_cognitive_units": 0.0,
+    "used_cost_usd": 0.0,
+    "used_time_seconds": 0.0,
+    "used_tokens": 0.0
+  },
+  "contract_id": "contract:b001:1",
+  "contribution_id": "moltbook:c1:bounty_claim",
+  "created_at": "2026-07-19T09:42:32.295084+00:00",
+  "deadline": "2026-07-20T12:00:00+00:00",
+  "description": "Read and review the heartbeat scanner. Suggest improvements for error handling or Moltbook API integration.",
+  "parent_contract_id": null,
+  "schema_version": "1",
+  "state": "drafted",
+  "success_criteria": [
+    {
+      "description": "A review comment was posted back to the bounty thread",
+      "met": null,
+      "name": "review_comment_posted",
+      "required": true,
+      "weight": 1.0
+    }
+  ],
+  "termination_reason": null,
+  "title": "Review village/heartbeat.py",
+  "version": "1.0"
+}
