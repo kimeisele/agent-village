@@ -2093,3 +2093,71 @@ Code-Pfad liest ein `SUCCEEDED`-`WorkResult` und entscheidet, ob es den
 Bounty/Contract erfüllt — das bleibt der nächste, hier bewusst noch
 nicht begonnene Schritt (siehe PR #13/#14-Berichte, "kleinster
 sinnvoller nächster Schritt": ein manueller Review-Gate).
+
+## §33 — Repository Fortress 01: `main` gegen direkte Pushes abgesichert (2026-07-19)
+
+**Vorherige Lücke, jetzt geschlossen:** Bis zu diesem Slice war `main`
+vollständig ungeschützt (`branches/main/protection` -> `404 Branch not
+protected`, keine Rulesets). Der Doku-Folgecommit
+`637c49475a8dc78996a5e721ac6568c9b477a6dd` (Operator Execution 01,
+direkt auf `main` gepusht) war dadurch inhaltlich zulässig, aber
+technisch nur möglich, weil nichts einen direkten Push verhinderte --
+genau die Lücke, die dieser Slice schließt.
+
+**Operator Execution 01 -- Live-Proof-Ergebnis, hier festgehalten (kein
+vorhandener Abschnitt geändert):** Run
+[29696150575](https://github.com/kimeisele/agent-village/actions/runs/29696150575),
+Merge-Commit `5da0273479f510de85f7824fea4f12d9a32575da`. `accepted: true`,
+`claimed -> submitted`, Contract blieb `ACTIVE` (kein `fulfilled`). Ein
+Provider-Aufruf: `prompt_tokens: 5470, completion_tokens: 339,
+total_tokens: 5809, cost_usd: 0.00086072, duration_seconds: 5.91`. Kein
+Secret-Leak (einzige Fundstelle im Rohlog: die von GitHub selbst
+maskierte `DEEPSEEK_API_KEY: ***`-Zeile). Die dabei automatisch erzeugte
+Proof-Bounty hatte einen vertraglich **unbeschränkten** Contract (alle
+Budget-Felder `null`) -- in Repository Fortress 01 korrigiert (feste
+Limits `tokens=40000`, `cost_usd=0.05`, `time_seconds=180`, siehe PR
+#17).
+
+**Neu aktiviert (klassischer Branch Protection, nicht Ruleset):** PRs
+für `main` verpflichtend (`enforce_admins: true`, gilt auch für den
+alleinigen Maintainer); `required_approving_review_count: 0` (Autor kann
+eigenen PR nach grünem CI mergen); Pflicht-Check `pytest`
+(verifizierter Name aus `commits/{sha}/check-runs`, nicht geraten);
+`strict: true` (Branch muss vor Merge aktuell sein); offene
+Review-Konversationen müssen gelöst sein; Force Push und
+Branch-Löschung deaktiviert; keine Bypass-Restrictions
+(`restrictions: null`). Vollständige Herleitung, Rollback-Befehl und
+Admin/Lockout-Analyse in `docs/research/REPOSITORY_FORTRESS_01.md`.
+
+**Praktischer Verifikationstest (2026-07-19, ~20:00 UTC):**
+
+1. **Direkter Push auf `main` — kontrolliert getestet und blockiert.**
+   ```text
+   remote: error: GH006: Protected branch update failed for refs/heads/main.
+   remote: - Changes must be made through a pull request.
+   remote: - Required status check "pytest" is expected.
+   To https://github.com/kimeisele/agent-village.git
+    ! [remote rejected] village/fortress-marker-01 -> main (protected branch hook declined)
+   ```
+   `enforce_admins: true` wirkt: selbst der alleinige Maintainer
+   (`kimeisele`) kann nicht mehr direkt auf `main` pushen.
+
+2. **PR-Happy-Path — dieser Eintrag selbst ist der Beweis.** Dieser
+   Abschnitt §33 erreicht `main` ausschließlich über einen Pull Request
+   mit grünem CI (`pytest`), nicht per direktem Push. Der Maintainer
+   kann weiterhin regulär per PR arbeiten (eigenen PR nach CI-Grün
+   mergen, da `required_approving_review_count: 0`).
+
+3. **API-Soll/Ist-Vergleich** (per `gh api repos/.../branches/main/protection`,
+   2026-07-19):
+   - `required_status_checks.strict`: `true` ✅
+   - `required_status_checks.contexts`: `["pytest"]` ✅
+   - `required_pull_request_reviews.required_approving_review_count`: `0` ✅
+   - `enforce_admins.enabled`: `true` ✅
+   - `allow_force_pushes.enabled`: `false` ✅
+   - `allow_deletions.enabled`: `false` ✅
+   - `required_conversation_resolution.enabled`: `true` ✅
+   - `required_signatures.enabled`: `false` ✅ (nicht gefordert)
+   - `required_linear_history.enabled`: `false` ✅ (nicht gefordert)
+   - `lock_branch.enabled`: `false` ✅ (nicht gefordert)
+   - Keine Bypass-Actors (`restrictions: null`) ✅
