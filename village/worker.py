@@ -120,8 +120,12 @@ def build_repair_prompt(order: WorkOrder, file_content: str, reason: str) -> str
 
 def _empty_usage() -> dict:
     return {
-        "prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0,
-        "total_tokens": 0, "cost_usd": 0.0, "duration_seconds": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "reasoning_tokens": 0,
+        "total_tokens": 0,
+        "cost_usd": 0.0,
+        "duration_seconds": 0.0,
     }
 
 
@@ -176,10 +180,18 @@ def run_work_order(
 
     def finish(status: WorkResultStatus, error: str | None = None, output: dict | None = None) -> WorkResult:
         return WorkResult(
-            work_result_id=work_result_id, contract_id=contract.contract_id, execution_id=execution_id,
-            provider=provider.name, model=model_hint, status=status, output=output,
+            work_result_id=work_result_id,
+            contract_id=contract.contract_id,
+            execution_id=execution_id,
+            provider=provider.name,
+            model=model_hint,
+            status=status,
+            output=output,
             evidence={"phase_log": phase_log, "target_file": order.target_file, "instruction": order.instruction},
-            usage=dict(cumulative_usage), started_at=started_at, finished_at=datetime.now(timezone.utc), error=error,
+            usage=dict(cumulative_usage),
+            started_at=started_at,
+            finished_at=datetime.now(timezone.utc),
+            error=error,
         )
 
     def call_provider(prompt: str) -> CognitiveResponse | WorkResult:
@@ -188,7 +200,9 @@ def run_work_order(
         error or budget exceeded)."""
         nonlocal calls_made
         try:
-            response = provider.complete(prompt, max_tokens=DEFAULT_CALL_MAX_TOKENS, timeout_seconds=DEFAULT_TIMEOUT_SECONDS)
+            response = provider.complete(
+                prompt, max_tokens=DEFAULT_CALL_MAX_TOKENS, timeout_seconds=DEFAULT_TIMEOUT_SECONDS
+            )
         except ProviderAuthError as exc:
             return finish(WorkResultStatus.PROVIDER_ERROR, f"auth_error: {exc}")
         except ProviderTimeoutError as exc:
@@ -222,19 +236,25 @@ def run_work_order(
 
     while True:
         if calls_made >= MAX_LLM_CALLS_PER_EXECUTION:
-            return finish(WorkResultStatus.INVALID_OUTPUT, f"reached MAX_LLM_CALLS_PER_EXECUTION ({MAX_LLM_CALLS_PER_EXECUTION}) without a valid result")
+            return finish(
+                WorkResultStatus.INVALID_OUTPUT,
+                f"reached MAX_LLM_CALLS_PER_EXECUTION ({MAX_LLM_CALLS_PER_EXECUTION}) without a valid result",
+            )
 
         # ── GENERATE ──────────────────────────────────────────────────
         result = call_provider(prompt)
         if isinstance(result, WorkResult):
             return result
         response = result
-        phase_log.append({
-            "phase": "generate", "attempt": repair_attempts,
-            "finish_reason": response.finish_reason,
-            "has_visible_text": bool(response.visible_text.strip()),
-            "has_reasoning_text": bool(response.reasoning_text),
-        })
+        phase_log.append(
+            {
+                "phase": "generate",
+                "attempt": repair_attempts,
+                "finish_reason": response.finish_reason,
+                "has_visible_text": bool(response.visible_text.strip()),
+                "has_reasoning_text": bool(response.reasoning_text),
+            }
+        )
 
         # ── INTERPRET ────────────────────────────────────────────────
         candidate_text = response.visible_text or response.reasoning_text or ""
@@ -249,15 +269,23 @@ def run_work_order(
         # REPAIR (regenerate) instead. Reserved for the one case where
         # it earns its keep: real content, wrong/missing structure.
         candidate_is_substantive = bool(candidate_text.strip()) and response.finish_reason != "length"
-        if parsed is None and candidate_is_substantive and not interpretation_call_used and calls_made < MAX_LLM_CALLS_PER_EXECUTION:
+        if (
+            parsed is None
+            and candidate_is_substantive
+            and not interpretation_call_used
+            and calls_made < MAX_LLM_CALLS_PER_EXECUTION
+        ):
             interpretation_call_used = True
             interp_result = call_provider(build_interpretation_prompt(candidate_text))
             if isinstance(interp_result, WorkResult):
                 return interp_result
             interp_response = interp_result
-            phase_log.append({
-                "phase": "interpret_call", "finish_reason": interp_response.finish_reason,
-            })
+            phase_log.append(
+                {
+                    "phase": "interpret_call",
+                    "finish_reason": interp_response.finish_reason,
+                }
+            )
             parsed, interpret_error = tolerant_parse(interp_response.visible_text or "")
 
         # ── EVALUATE ─────────────────────────────────────────────────
@@ -272,7 +300,10 @@ def run_work_order(
         repair_attempts += 1
         if repair_attempts > MAX_REPAIR_ATTEMPTS:
             phase_log.append({"phase": "finished", "result": "repair_attempts_exhausted"})
-            return finish(WorkResultStatus.INVALID_OUTPUT, f"exhausted {MAX_REPAIR_ATTEMPTS} repair attempts; last reason: {reason}")
+            return finish(
+                WorkResultStatus.INVALID_OUTPUT,
+                f"exhausted {MAX_REPAIR_ATTEMPTS} repair attempts; last reason: {reason}",
+            )
 
         phase_log.append({"phase": "repair", "attempt": repair_attempts, "reason": reason})
         prompt = build_repair_prompt(order, file_content, reason)

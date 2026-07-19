@@ -1,8 +1,9 @@
 # Pure verification infrastructure — no product scope change. Runs the
 # existing test suite on push/PR to main so "N/N grün" is independently
 # checkable in the Actions log instead of only ever asserted locally
-# (see docs/BEFUND.md §20). Does not touch village-heartbeat.yml or any
-# of the feature-flag/cron behavior — this workflow only runs pytest.
+# (see docs/BEFUND.md §20). Ruff and mypy steps added during Type Safety
+# Foundation 01 — the job id `pytest` is intentionally unchanged to
+# preserve the existing branch-protection required-check name.
 name: Tests
 
 on:
@@ -22,8 +23,14 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install pytest
-        run: pip install pytest
+      - name: Install dependencies
+        run: pip install pytest ruff mypy
+
+      - name: Run Ruff (E, F, I)
+        run: ruff check --select E,F,I village/ scripts/ tests/
+
+      - name: Run mypy
+        run: python3 -m mypy village/ scripts/ --ignore-missing-imports --explicit-package-bases
 
       - name: Run test suite
         run: python3 -m pytest tests/ -v

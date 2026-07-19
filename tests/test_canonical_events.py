@@ -13,7 +13,6 @@ from village.village_core import (
     sanitize_name,
 )
 
-
 # =============================================================================
 # §E.4 — a Moltbook comment and a GitHub issue produce the same event schema
 # =============================================================================

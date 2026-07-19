@@ -23,8 +23,8 @@ from village.interpreter import RESULT_BEGIN, RESULT_END
 from village.work_result import WorkResultStatus
 from village.worker import (
     MAX_LLM_CALLS_PER_EXECUTION,
-    MAX_REPAIR_ATTEMPTS,
     MAX_PROMPT_CHARS,
+    MAX_REPAIR_ATTEMPTS,
     WorkOrder,
     build_prompt,
     run_work_order,

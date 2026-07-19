@@ -18,6 +18,7 @@ import re
 import time
 import unicodedata
 from dataclasses import asdict, dataclass, field
+from typing import Any
 
 _NAME_MAX_LEN = 40
 
@@ -55,11 +56,11 @@ class CanonicalIngressEvent:
     received_at: float
     dedup_key: str
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
-def moltbook_comment_to_event(comment: dict) -> CanonicalIngressEvent:
+def moltbook_comment_to_event(comment: dict[str, Any]) -> CanonicalIngressEvent:
     """Normalize a raw Moltbook comment payload (docs/SPEC.md §2.4 shape)
     into a CanonicalIngressEvent. `actor_id` prefers a platform-stable
     author id field if present; Moltbook's observed payloads only carry

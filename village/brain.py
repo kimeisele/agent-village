@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import urllib.request
+from typing import Any, cast
 
 # Hardened 2026-07-18 (docs/BEFUND.md §17): the original version matched
 # loose, everyday phrases anywhere in the text ("suggestion", "i wish",
@@ -36,7 +37,7 @@ def is_actionable(text: str) -> tuple[bool, str]:
         return True, "bug"
     return False, ""
 
-def create_issue(token: str, repo: str, title: str, body: str, labels: list[str]) -> dict | None:
+def create_issue(token: str, repo: str, title: str, body: str, labels: list[str]) -> dict[str, Any] | None:
     """Create a GitHub Issue. Returns issue data or None."""
     url = f"https://api.github.com/repos/{repo}/issues"
     data = json.dumps({"title": title, "body": body, "labels": labels}).encode()
@@ -46,7 +47,7 @@ def create_issue(token: str, repo: str, title: str, body: str, labels: list[str]
     req.add_header("Content-Type", "application/json")
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
-            return json.loads(r.read())
+            return cast(dict[str, Any], json.loads(r.read()))
     except Exception as e:
         print(f"  [brain] create_issue failed: {e}")
         return None

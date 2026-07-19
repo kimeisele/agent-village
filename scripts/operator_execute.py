@@ -38,13 +38,11 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT))  # noqa: E402 — standalone script, must add repo root before importing village.*
 
-import village.bounty_review as br
-import village.heartbeat as hb
-from village.deepseek_provider import DEEPSEEK_API_KEY_VAR, DeepSeekProvider
-from village.execution_orchestrator import ExecutionRequest, run_operator_execution
-
+import village.heartbeat as hb  # noqa: E402 — sys.path precedes (see above)
+from village.deepseek_provider import DEEPSEEK_API_KEY_VAR, DeepSeekProvider  # noqa: E402
+from village.execution_orchestrator import ExecutionRequest, run_operator_execution  # noqa: E402
 
 # Conservative, explicit budget for the auto-created disposable proof
 # bounty (Repository Fortress 01) -- prior live proofs (runs 29691336561,
@@ -102,7 +100,9 @@ def resolve_target_file(target_file: str, repo_root: Path, evidence_path: Path) 
     raw = Path(target_file)
 
     if raw.is_absolute():
-        raise TargetPathError(f"target_file must be a relative path within the repository, got an absolute path: {target_file!r}")
+        raise TargetPathError(
+            f"target_file must be a relative path within the repository, got an absolute path: {target_file!r}"
+        )
 
     resolved = (repo_root / raw).resolve()  # follows any symlinks to their real target
 
@@ -146,10 +146,15 @@ def main() -> int:
 
     if not os.environ.get(DEEPSEEK_API_KEY_VAR):
         print(f"::error::{DEEPSEEK_API_KEY_VAR} not set -- clean skip, not a fake success.")
-        evidence_path.write_text(json.dumps({
-            "status": "SKIPPED_NO_SECRET",
-            "reason": f"{DEEPSEEK_API_KEY_VAR} not set",
-        }, indent=2))
+        evidence_path.write_text(
+            json.dumps(
+                {
+                    "status": "SKIPPED_NO_SECRET",
+                    "reason": f"{DEEPSEEK_API_KEY_VAR} not set",
+                },
+                indent=2,
+            )
+        )
         return 1
 
     try:
@@ -188,7 +193,10 @@ def main() -> int:
             print(f"::error::bounty {bounty_id} not found")
             return 1
         if bounty.get("status") != "claimed" or bounty.get("claimed_by") != actor_id:
-            print(f"::error::bounty {bounty_id} is not claimed by {actor_id!r} (status={bounty.get('status')!r}, claimed_by={bounty.get('claimed_by')!r})")
+            print(
+                f"::error::bounty {bounty_id} is not claimed by {actor_id!r} "
+                f"(status={bounty.get('status')!r}, claimed_by={bounty.get('claimed_by')!r})"
+            )
             return 1
 
     contract_id = hb._contract_id_for(bounty_id)

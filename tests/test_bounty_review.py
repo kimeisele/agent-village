@@ -13,7 +13,7 @@ import pytest
 
 import village.bounty_review as br
 import village.heartbeat as hb
-from village.contracts import ContractState, SuccessCriterion
+from village.contracts import ContractState
 from village.work_result import WorkResult, WorkResultStatus
 
 

@@ -23,7 +23,6 @@ import village.bounty_review as br
 import village.execution_orchestrator as eo
 import village.heartbeat as hb
 from village.cognitive_provider import CognitiveProvider, CognitiveResponse, ProviderUsage
-from village.contracts import Budget
 from village.work_result import WorkResultStatus
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "operator_execute.py"

@@ -51,7 +51,7 @@ import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Dict, Final, List, Optional, Sequence, Tuple
+from typing import Dict, Final, List, Optional, Sequence, Tuple, cast
 
 logger = logging.getLogger("MOLTBOOK_CAPTCHA")
 
@@ -444,28 +444,65 @@ class CaptchaCandidate:
 
 
 _NUMBER_WORDS: Final[Dict[str, int]] = {
-    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
-    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
-    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
-    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
-    "seventy": 70, "eighty": 80, "ninety": 90, "hundred": 100, "thousand": 1000,
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
+    "hundred": 100,
+    "thousand": 1000,
 }
 
 _OPERATOR_WORDS: Final[Dict[str, str]] = {
-    "plus": "+", "add": "+", "sum": "+",
-    "minus": "-", "subtract": "-", "difference": "-",
-    "times": "*", "multiply": "*",
-    "divided": "/", "divide": "/",
-    "modulo": "%", "mod": "%", "remainder": "%",
+    "plus": "+",
+    "add": "+",
+    "sum": "+",
+    "minus": "-",
+    "subtract": "-",
+    "difference": "-",
+    "times": "*",
+    "multiply": "*",
+    "divided": "/",
+    "divide": "/",
+    "modulo": "%",
+    "mod": "%",
+    "remainder": "%",
     # Added after BEFUND.md §5 / live E2E test: these must be in the
     # reconstruction vocabulary, not just _extract_math's trigger-word
     # list — without a vocab entry, _pada_collapse/_pada_aggressive have no
     # reason to reassemble them and they stay as unrecognized fragments
     # (e.g. "acceeleratesby"), so the trigger-word substring check on the
     # decoded text never finds them either.
-    "gains": "+", "gain": "+", "accelerates": "+",
-    "loses": "-", "lose": "-", "looses": "-", "decelerates": "-",
+    "gains": "+",
+    "gain": "+",
+    "accelerates": "+",
+    "loses": "-",
+    "lose": "-",
+    "looses": "-",
+    "decelerates": "-",
 }
 
 _CONTEXT_WORDS: Final[Tuple[str, ...]] = ("total", "combined", "altogether", "together", "and")
@@ -721,9 +758,7 @@ def _pada_aggressive(tokens: List[str], max_window: int = 10) -> List[str]:
 _TENS_WORDS: Final[frozenset] = frozenset(
     {"twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"}
 )
-_ONES_WORDS: Final[frozenset] = frozenset(
-    {"one", "two", "three", "four", "five", "six", "seven", "eight", "nine"}
-)
+_ONES_WORDS: Final[frozenset] = frozenset({"one", "two", "three", "four", "five", "six", "seven", "eight", "nine"})
 
 
 def _merge_compounds(words: List[str]) -> List[str]:
@@ -758,7 +793,7 @@ def _extract_math(decoded_text: str) -> Optional[str]:
     if not numbers:
         return None
     if len(numbers) == 1:
-        return numbers[0]
+        return cast(str, numbers[0])
 
     text_lower = decoded_text.lower()
 
@@ -849,7 +884,9 @@ def _strategy_collapse(challenge: str) -> List[CaptchaCandidate]:
         if answer is None or answer in seen_answers:
             continue
         seen_answers.add(answer)
-        results.append(CaptchaCandidate(answer=answer, expression=expr, decoded_text=decoded, strategy=f"collapse_w{w}"))
+        results.append(
+            CaptchaCandidate(answer=answer, expression=expr, decoded_text=decoded, strategy=f"collapse_w{w}")
+        )
     return results
 
 
@@ -870,7 +907,9 @@ def _strategy_aggressive(challenge: str) -> List[CaptchaCandidate]:
         if answer is None or answer in seen_answers:
             continue
         seen_answers.add(answer)
-        results.append(CaptchaCandidate(answer=answer, expression=expr, decoded_text=decoded, strategy=f"aggressive_w{w}"))
+        results.append(
+            CaptchaCandidate(answer=answer, expression=expr, decoded_text=decoded, strategy=f"aggressive_w{w}")
+        )
     return results
 
 
@@ -899,7 +938,9 @@ def _score_expression(candidate: CaptchaCandidate, _challenge: str) -> float:
     return 0.0
 
 
-def _score_consensus(candidate: CaptchaCandidate, _challenge: str, all_candidates: Sequence[CaptchaCandidate] = ()) -> float:
+def _score_consensus(
+    candidate: CaptchaCandidate, _challenge: str, all_candidates: Sequence[CaptchaCandidate] = ()
+) -> float:
     """How many strategies agree on this answer?"""
     if len(all_candidates) < 2:
         return 0.25
@@ -1041,13 +1082,19 @@ class CaptchaChamber:
 
         logger.debug(
             "CaptchaChamber: best=%s score=%.2f scores=%s strategies=%d",
-            best.answer, best.total_score, best.scores, len(candidates),
+            best.answer,
+            best.total_score,
+            best.scores,
+            len(candidates),
         )
 
         if best.total_score < CONFIDENCE_THRESHOLD:
             logger.warning(
                 "CaptchaChamber: low confidence (%.2f < %.2f), skipping. Best candidate: answer=%s strategy=%s",
-                best.total_score, CONFIDENCE_THRESHOLD, best.answer, best.strategy,
+                best.total_score,
+                CONFIDENCE_THRESHOLD,
+                best.answer,
+                best.strategy,
             )
             return None
 
@@ -1186,7 +1233,9 @@ def solve_and_verify(mb_call, verification: dict) -> dict:
         monitor.record_success()
         logger.info(
             "solve_and_verify: solved (llm_fallback=%s). challenge=%r answer=%s",
-            used_llm_fallback, challenge_text, answer_str,
+            used_llm_fallback,
+            challenge_text,
+            answer_str,
         )
         return {"solved": True, "answer": answer_str, "used_llm_fallback": used_llm_fallback, "response": resp}
 
@@ -1199,7 +1248,10 @@ def solve_and_verify(mb_call, verification: dict) -> dict:
     # for good). Log the full text; it's never excessively long.
     logger.warning(
         "solve_and_verify: verify call failed (llm_fallback=%s). challenge=%r answer=%s response=%r",
-        used_llm_fallback, challenge_text, answer_str, resp,
+        used_llm_fallback,
+        challenge_text,
+        answer_str,
+        resp,
     )
     return {
         "solved": False,

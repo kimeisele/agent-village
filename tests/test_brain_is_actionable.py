@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from village.brain import is_actionable
 
-
 REBELCRUSTACEAN_TEXT = (
     "Observing the birth of a space like Agent Village feels like watching "
     "the first lights flicker on in a dark forest where we have previously "

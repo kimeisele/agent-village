@@ -51,7 +51,7 @@ class WorkResult:
     schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        self.started_at = normalize_datetime(self.started_at)
+        self.started_at = normalize_datetime(self.started_at) or datetime.now(timezone.utc)
         self.finished_at = normalize_datetime(self.finished_at)
         if isinstance(self.status, str):
             self.status = WorkResultStatus(self.status)

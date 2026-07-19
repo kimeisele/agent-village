@@ -27,7 +27,7 @@ from __future__ import annotations
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import village.heartbeat as heartbeat
 from village.contracts import ContractState
@@ -103,22 +103,22 @@ def _safe_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
             return cleaned
         return value
 
-    return _clean(evidence)
+    return cast(dict[str, Any], _clean(evidence))
 
 
-def _find_bounty(board: dict, bounty_id: str) -> dict | None:
+def _find_bounty(board: dict[str, Any], bounty_id: str) -> dict[str, Any] | None:
     for b in board.get("bounties", []):
         if b["id"] == bounty_id:
-            return b
+            return cast(dict[str, Any], b)
     return None
 
 
-def _load_submissions() -> dict:
+def _load_submissions() -> dict[str, Any]:
     return _load(SUBMISSIONS)
 
 
-def _get_submission(submission_id: str) -> dict | None:
-    return _load_submissions().get("submissions", {}).get(submission_id)
+def _get_submission(submission_id: str) -> dict[str, Any] | None:
+    return cast(dict[str, Any] | None, _load_submissions().get("submissions", {}).get(submission_id))
 
 
 def _next_submission_id(bounty_id: str, execution_id: str) -> str:
@@ -318,7 +318,7 @@ def bounty_review(
         # preserved, not deleted or overwritten by a later resubmit --
         # _next_submission_id() guarantees the next submit() gets its own
         # fresh id.
-        _attach_review(submission_id, review_record)
+        _attach_review(str(submission_id), review_record)
 
         bounty["status"] = "claimed"
         _save(heartbeat.BOUNTIES, board)
@@ -332,7 +332,7 @@ def bounty_review(
     except ValueError:
         return None
 
-    _attach_review(submission_id, review_record)
+    _attach_review(str(submission_id), review_record)
     _save_contract(contract)
 
     bounty["status"] = "done"

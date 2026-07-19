@@ -2161,3 +2161,41 @@ Admin/Lockout-Analyse in `docs/research/REPOSITORY_FORTRESS_01.md`.
    - `required_linear_history.enabled`: `false` ✅ (nicht gefordert)
    - `lock_branch.enabled`: `false` ✅ (nicht gefordert)
    - Keine Bypass-Actors (`restrictions: null`) ✅
+
+---
+
+## §34 — Type Safety Foundation 01: Ruff + mypy in CI (2026-07-19)
+
+**Ausgangszustand vor diesem Slice:** Kein Type-Checker, kein Linter in CI.
+7 reale mypy-Fehler existierten (dokumentiert in TYPE_SAFETY_BASELINE_01.md
+seit Operator Execution 01), wurden aber nicht gefixt — reine Read-Only-
+Dokumentation.
+
+**Jetzt aktiv:**
+
+- **Ruff** (E, F, I, line-length 120): 0 Fehler. Tests von E501 ausgenommen.
+- **mypy** (check_untyped_defs, no_implicit_optional, warn_unused_ignores,
+  warn_redundant_casts, warn_return_any): 0 Fehler in 15 Quell-Dateien.
+  `disallow_any_generics` bewusst deferred (60+ Bare-Generic-Stellen,
+  Folge-Slice).
+- **CI:** Ruff + mypy als vorgelagerte Schritte im bestehenden `pytest`-Job
+  (`.github/workflows/tests.yml`). Branch-Protection-Checkname `pytest`
+  unverändert — ein Ruff- oder mypy-Fehler macht den erforderlichen Check rot.
+- **7 reale Typfehler** behoben (datetime-None-Guards, Any-Return-Casts,
+  arg-type-Fixes).
+- **302/302 Tests** weiterhin grün.
+- **py_compile** grün.
+- **Negativnachweis:** Absichtlicher Typfehler → mypy schlägt fehl.
+  Absichtlicher Import-Fehler → ruff schlägt fehl. Beide temporären
+  Änderungen vollständig rückgängig gemacht.
+
+**Nicht verändert:** Repository Protection, Secrets, Workflow-Berechtigungen,
+Agentenfähigkeiten, Axiom.
+
+**Dokumentation:** `docs/research/TYPE_SAFETY_FOUNDATION_01.md` mit
+Baseline, Regel-Auswahl, Fehler-Details, Any-Klassifikation, Deferral-
+Begründung und stufenweisem Plan zu `strict = true`.
+
+**Bewusst deferred, dokumentiert mit konkretem Folgeplan:**
+`disallow_any_generics = true` — siehe TYPE_SAFETY_FOUNDATION_01.md für
+die genaue Begründung und den stufenweisen Weg.

@@ -31,7 +31,6 @@ from village.moltbook_captcha import (
     solve_and_verify,
 )
 
-
 # =============================================================================
 # 1. Adapted from steward-protocol's test_moltbook.py
 # =============================================================================
