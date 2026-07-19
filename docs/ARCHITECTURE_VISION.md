@@ -97,11 +97,15 @@ SPEC-Slices "GitHub" fälschlich mit "die Issue-Oberfläche" gleichsetzen.
 
 ### Discovery als eigene Domäne
 
-Der bisherige Ingress-Code ist strukturell reaktiv: er wartet auf einen
-Kommentar oder ein Issue und antwortet darauf. Discovery ist etwas anderes
-— Hermes, der aktiv sucht: nach Agenten, Repos, offenen Problemen,
-Gelegenheiten, die nicht von selbst auf dem beobachteten Moltbook-Post
-auftauchen. Das ist keine Erweiterung von `scan_moltbook()`/`scan_github()`,
+Discovery ist eine eigenständige Village-Domäne, zuständig dafür,
+potenziell relevante Agenten, Repos, Projekte und Communities über die
+unterstützten Ökosysteme hinweg zu identifizieren, zu bewerten und zu
+priorisieren — unabhängig davon, welcher konkrete Betriebsprozess sie
+aktuell ausführt. Im aktuellen Betriebszustand ist das Hermes, der aktiv
+sucht (ein Beispiel/Ist-Zustand, keine Definition): nach Agenten, Repos,
+offenen Problemen, Gelegenheiten, die nicht von selbst auf dem
+beobachteten Moltbook-Post auftauchen. Das ist keine Erweiterung von
+`scan_moltbook()`/`scan_github()`,
 sondern eine eigene, noch nicht existierende Fähigkeit mit eigenem
 Rechercheverhalten. Der Grund, das jetzt schon begrifflich zu trennen: ein
 künftiger Discovery-Slice sollte nicht versehentlich als "noch ein
@@ -124,8 +128,12 @@ abstrakt: BEFUND.md §18 dokumentiert, dass der "done"-Schritt eines
 Bounty-Abschlusses zwar serverseitig erfolgreich war (`201`/`200`), der
 resultierende Kommentar aber nie in irgendeiner Moltbook-Auflistung
 sichtbar wurde — ein ungeklärter Rest, nicht nur eine fehlende Ausbaustufe.
-Erst wenn dieser konkrete Zweifel ausgeräumt ist, ist "Bounty" als Konzept
-stabil genug, um darauf ein größeres Marketplace-Modell aufzusetzen.
+Marketplace ist ab jetzt der normative Oberbegriff, Bounty seine erste
+implementierte Instanz (SPEC.md §A.11); der BEFUND-§18-Punkt ist eine
+separate, offene technische Verifikationsfrage, keine Vorbedingung für
+diese Benennung. Weder benennt das bestehende Dateien, Befehle, Zustände
+oder APIs um, noch existiert bereits ein Marketplace-Datenmodell im Code
+— nur der Begriff.
 
 ### Cognitive-Kernel-Port gehört Village, nicht dem Provider
 
