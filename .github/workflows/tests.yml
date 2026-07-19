@@ -23,11 +23,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
+      - name: Ruff version
+        run: ruff --version
+
       - name: Run Ruff
-        run: ruff check village/ scripts/ tests/
+        run: ruff check
 
       - name: Run Ruff format check
-        run: ruff format --check village/ scripts/ tests/
+        run: ruff format --check .
 
       - name: Run mypy
         run: python3 -m mypy village scripts

@@ -38,8 +38,7 @@ B001 = {
     "id": "b001",
     "title": "Review village/heartbeat.py",
     "description": (
-        "Read and review the heartbeat scanner. Suggest improvements for "
-        "error handling or Moltbook API integration."
+        "Read and review the heartbeat scanner. Suggest improvements for error handling or Moltbook API integration."
     ),
     "reward": "reputation",
 }

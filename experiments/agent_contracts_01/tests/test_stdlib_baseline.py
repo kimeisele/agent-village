@@ -7,7 +7,6 @@ AGENT_CONTRACTS_EXPERIMENT_01.md step 5.
 from __future__ import annotations
 
 import pytest
-
 from stdlib_baseline import (
     build_b001_budget,
     evaluate_success,
@@ -58,8 +57,9 @@ def test_success_criterion_is_deterministically_checkable():
 
 
 def test_library_error_on_invalid_input_is_caught_cleanly():
-    from stdlib_baseline import BountyBudget
     from datetime import datetime, timezone
+
+    from stdlib_baseline import BountyBudget
 
     with pytest.raises(ValueError, match="non-negative"):
         BountyBudget(
