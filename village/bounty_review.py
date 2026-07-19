@@ -104,14 +104,16 @@ def _safe_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
         return value
 
     result = _clean(evidence)
-    assert isinstance(result, dict)
+    if not isinstance(result, dict):
+        raise ValueError(f"_safe_evidence: expected dict result, got {type(result).__name__}")
     return result
 
 
 def _find_bounty(board: dict[str, Any], bounty_id: str) -> dict[str, Any] | None:
     for b in board.get("bounties", []):
         if b["id"] == bounty_id:
-            assert isinstance(b, dict)
+            if not isinstance(b, dict):
+                raise ValueError(f"bounty record is not a dict: {type(b).__name__}")
             return b
     return None
 

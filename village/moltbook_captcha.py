@@ -796,7 +796,8 @@ def _extract_math(decoded_text: str) -> Optional[str]:
         return None
     if len(numbers) == 1:
         result = numbers[0]
-        assert isinstance(result, str)
+        if not isinstance(result, str):
+            return None
         return result
 
     text_lower = decoded_text.lower()

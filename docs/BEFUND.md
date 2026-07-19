@@ -2184,14 +2184,18 @@ endgültige Fassung ist unten dokumentiert.
 - requirements-dev.txt: pytest==8.0.0, ruff==0.8.1, mypy==1.18.2.
 - ignore_missing_imports: nicht benötigt (cryptography ist PEP 561).
 
-**Typ-Boundaries:**
+**Typ-Boundaries (Variante B — pragmatische kompatible Grenze):**
 - village/_types.py: JsonValue-TypeAlias + is_json_value() TypeGuard
   + load_json_object() mit rekursiver Validierung inkl. NaN/Infinity.
-- _load(p) → JsonObject via load_json_object() — zentrale validierte
-  Persistenzgrenze. Kein cast().
-- _save(p, data: JsonObject) → None.
-- _api/_gh/_mb → JsonValue | None — externe API-Grenze.
-- _post_comment_verified() mit isinstance(resp, dict)-Guard.
+- _load(p) → dict[str, Any]: verwendet load_json_object() intern zur
+  Laufzeitvalidierung, dann dict()-Copy für kompatiblen Rückgabetyp.
+  Die Boundary ist runtime-validiert, aber statisch auf dict[str, Any]
+  verbreitert — bewusste Übergangslösung. Kein cast().
+- _save(p, data: dict[str, Any]) → None. Kein Any-Parameter mehr.
+- _api/_gh/_mb → Any: bewusst untypisierte externe HTTP-Grenze.
+  Call-Sites mit Objektannahme verwenden isinstance(resp, dict)-Guards.
+- Ein durchgängiges JsonValue-Modell ist NICHT Bestandteil von
+  Foundation 01 — bleibt konkrete technische Schuld.
 
 **Behobene Fehler:**
 - 7 reale mypy-Fehler (datetime-None, no-any-return, arg-type).
@@ -2199,13 +2203,17 @@ endgültige Fassung ist unten dokumentiert.
 - 6 untypisierte Produktionsfunktionen annotiert.
 - str(submission_id) → isinstance(raw, str)-Guard.
 - # type: ignore[assignment] entfernt (claim_result/complete_result).
-- Alle cast()-Aufrufe entfernt oder durch validierte Loader ersetzt.
+- Alle 9 cast()-Aufrufe entfernt: ersetzt durch load_json_object(),
+  isinstance-Guards, und ValueError-Raises an Persistenzgrenzen.
+- 5 assert isinstance() durch ValueError/None-Return ersetzt
+  (assert ist mit python -O deaktivierbar — kein Boundary-Schutz).
 
-**CI:** requirements-dev.txt → ruff check → ruff format --check →
+**CI:** requirements-dev.txt → ruff check → ruff format --check . →
 mypy village scripts → pytest (Job-Name pytest unverändert).
 
 **Tests:** 327/327 (25 neu in test_type_safety.py).
 
-**Bewusst offen:** disallow_any_explicit, volles strict = true.
+**Bewusst offen:** disallow_any_explicit, volles strict = true,
+durchgängiges JsonValue-Modell.
 
 **Dokumentation:** docs/research/TYPE_SAFETY_FOUNDATION_01.md.

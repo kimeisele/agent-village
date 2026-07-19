@@ -119,7 +119,7 @@ def _load(p: Path) -> dict[str, Any]:
     return dict(load_json_object(p.read_text()))
 
 
-def _save(p: Path, d: Any) -> None:
+def _save(p: Path, data: dict[str, Any]) -> None:
     """Write-to-temp-then-atomic-replace (docs/research/
     BOUNTY_REVIEW_GATE_01.md Blocker 3): protects each individual file
     against a process crash mid-write leaving behind truncated/corrupt
@@ -131,7 +131,7 @@ def _save(p: Path, d: Any) -> None:
     """
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(f"{p.name}.tmp{os.getpid()}")
-    tmp.write_text(json.dumps(d, indent=2))
+    tmp.write_text(json.dumps(data, indent=2))
     tmp.replace(p)
 
 
@@ -536,7 +536,8 @@ def bounty_claim(bid: str, agent: str) -> dict[str, Any] | None:
                 contract.activate()
             _save_contract(contract)
 
-            assert isinstance(b, dict)
+            if not isinstance(b, dict):
+                raise ValueError(f"bounty record is not a dict: {type(b).__name__}")
             return b
     return None
 
