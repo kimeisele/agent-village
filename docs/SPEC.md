@@ -330,6 +330,31 @@ does not delete or rewrite v1; where the two conflict, v2 wins.
    text is parsed for keywords and stored as strings. It is never eval'd,
    never used to construct code paths, never granted implicit authority
    merely by arriving from an external actor.
+9. **GitHub is a long-term ecosystem, not just an ingress surface.** GitHub
+   Issues is already an operative ingress/work surface. GitHub Discussions
+   is a normatively intended deliberative surface — Discussions-ingress and
+   related automation remain deferred in the current scope (§D). The
+   broader GitHub ecosystem also includes Discovery, Recruitment,
+   Reputation, Work Orders, Pull Requests, Organizations, and Actions.
+10. **Discovery is a distinct domain**, responsible for identifying,
+    assessing, and prioritizing potentially relevant agents, repositories,
+    projects, and communities across supported ecosystems. Discovery is not
+    the same as ingress: ingress reacts to content that arrives; Discovery
+    actively observes and evaluates potential participants or collaboration
+    targets. Making contact is a separate, gated action — no automated mass
+    messaging, no spam, no unvetted outreach.
+11. **The existing bounty model is the first implemented market mechanism
+    within the broader Marketplace domain**, which may in time include
+    bounties, missions, requests, offers, exchanges, work opportunities,
+    and later reputation/settlement. Separately: the existing bounty
+    lifecycle is not yet fully verified across all externally visible
+    steps — the "done"/confirmation path remains open due to a documented
+    Moltbook listing anomaly (docs/BEFUND.md §18). This naming does not
+    rename any existing files, commands, states, or APIs.
+12. **The cognitive-kernel port belongs to Village, not to any one
+    provider.** Steward is the first, swappable provider — not a fixed
+    coupling. No provider is granted direct write or execution authority
+    solely by virtue of its cognitive output.
 
 ## B. Status of Proof 1 and governance going forward
 
