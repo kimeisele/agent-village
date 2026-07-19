@@ -91,9 +91,9 @@ def test_first_run_fails_verify_second_run_retries_not_skips(monkeypatch, tmp_pa
 
     result2 = hb.scan_moltbook()
 
-    assert len(verify_attempts_run2) == 1, (
-        "confirmation retry must be attempted on run 2, not skipped because dex_register() says _dup"
-    )
+    assert (
+        len(verify_attempts_run2) == 1
+    ), "confirmation retry must be attempted on run 2, not skipped because dex_register() says _dup"
     assert result2 == 1  # now counted as a successful confirmation
 
     proc2 = hb._load(hb.PROC_MB).get("comment_ids", [])
