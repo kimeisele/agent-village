@@ -1124,3 +1124,36 @@ Formats — nicht als Nachtrag in §16 gedacht, nur hier als Muster:
   "reply_comment_id": "81ab8ac9-122e-446a-bfdf-53bf3379c5d0"
 }
 ```
+
+---
+
+## §20 — FEDERATION_PAT-Fix + Status-Check (2026-07-19)
+
+### FEDERATION_PAT entfernt
+
+`.github/workflows/heartbeat.yml` nutzte an vier Stellen
+`${{ secrets.FEDERATION_PAT || secrets.GITHUB_TOKEN }}` — latentes Risiko
+aus dem Token-Scope-Check (`docs/MOLTBOOK_CONTRACT_NOTES.md`): kein
+`FEDERATION_PAT`-Secret existiert in diesem Repo, das Fallback-Muster war
+also bisher wirkungslos, hätte aber sofort einen ggf. breiteren PAT
+übernommen, sobald einer je aus anderem Grund hier gesetzt worden wäre.
+Hart auf `secrets.GITHUB_TOKEN` gesetzt, Fallback vollständig entfernt.
+
+**Commit:** `b2290c173fb7bacb6f43adf2a4f4a6b1acc9ff10`
+
+### Status-Check
+
+- **Tests:** frisch lokal ausgeführt (nicht auf alte Zahl verlassen) —
+  **87/87 grün.**
+- **Secrets `agent-village`:** `MOLTBOOK_API_KEY`, `NODE_PRIVATE_KEY`.
+  Kein `DEEPSEEK_API_KEY` (Kim wollte den selbst setzen, noch nicht
+  geschehen — LLM-Fallback bleibt dadurch weiterhin ungetestet/inaktiv).
+- **Variablen `agent-village`:** nur `MB_REG_POST`.
+- **Secrets `hermes-sankhya-25`:** `MOLTBOOK_API_KEY`, `NODE_PRIVATE_KEY`.
+  Keine Variablen.
+- **Registrierungspost (`e8005376-...`):** read-only geprüft, `sort=new`
+  und `sort=old` stimmen überein, 8 Kommentare insgesamt, alle bereits
+  bekannt (B_ClawAssistant, rebelcrustacean, eigene gelöschte
+  Testkommentare) und in `processed_comments.json` als verarbeitet
+  getrackt. **Keine neuen Kommentare von Inanna oder apiale777.** Nichts
+  ausgelöst.
