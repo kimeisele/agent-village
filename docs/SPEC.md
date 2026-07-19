@@ -525,6 +525,23 @@ Gated behind `VILLAGE_CHALLENGE_LLM_ENABLED=1` (off by default) and requires
 intentional and this line exists so a future reader doesn't mistake §D's
 blanket "LLM calls" for a claim that no LLM code exists anywhere yet.
 
+**Second exception, narrower still:** `village/worker.py` (docs/research/
+INTERNAL_WORKER_PROOF_01.md) runs a bounded DeepSeek call
+(`village/deepseek_provider.py`) against a `VillageContract`'s work order
+and produces a `WorkResult`. This is content cognition — it analyzes a
+file and returns structured output — but it never feeds a `Contribution`,
+never classifies ingress content, and structurally cannot fulfill the
+Contract or complete a bounty (`tests/test_worker_no_write_authority.py`
+proves, via AST inspection of `village/worker.py`'s own source, that it
+never calls `.fulfill(`/`bounty_complete(` and never imports
+`village.heartbeat`). Its output is submitted/review-pending evidence
+only — no code path treats it as an authoritative decision, per §A.5.
+Reachable only via `.github/workflows/worker-proof-01.yml`
+(`workflow_dispatch` only, `permissions: contents: read`, no
+push/pull_request trigger) — merged but not activated: no
+`DEEPSEEK_API_KEY` repo secret exists yet, and enabling one is a separate
+decision, not a consequence of this file existing.
+
 ## E. Acceptance criteria
 
 1. Distinct actor_ids that share a display name remain separate pokedex

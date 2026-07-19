@@ -1,0 +1,63 @@
+# SECURITY-CRITICAL, NOT ACTIVATED. workflow_dispatch only -- no push,
+# no pull_request/pull_request_target, no schedule, no trigger reachable
+# by external content (issue text, comment text, fork PRs). This
+# workflow is the first one in this repo that can spend a real
+# credential (DEEPSEEK_API_KEY) calling a real LLM. It stays merged but
+# UNUSABLE until DEEPSEEK_API_KEY is set up as a repo secret separately
+# and deliberately, by Kim, after this PR — not automatically enabled by
+# merging it. See docs/research/INTERNAL_WORKER_PROOF_01.md.
+#
+# permissions: contents: read (no write) -- this workflow must never be
+# able to commit/push/PR/merge anything, regardless of what
+# scripts/worker_proof_01.py does or doesn't do. The script itself also
+# never touches data/village/ (its Contract is in-memory only), so this
+# is defense in depth, not the only guard.
+name: Worker Proof 01 (DeepSeek, manual only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_file:
+        description: "Local file to analyze (repo-relative path)"
+        required: false
+        default: "village/heartbeat.py"
+      model:
+        description: "DeepSeek model id"
+        required: false
+        default: "deepseek-v4-flash"
+
+permissions:
+  contents: read
+
+jobs:
+  worker-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run worker proof (single bounded provider call)
+        env:
+          # Absent unless a maintainer has explicitly added this repo
+          # secret -- if unset, scripts/worker_proof_01.py exits 1 with a
+          # clean "not set" message and writes a non-secret
+          # SKIPPED_NO_SECRET evidence file, never a fake success.
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_MODEL: ${{ inputs.model }}
+          WORKER_PROOF_TARGET_FILE: ${{ inputs.target_file }}
+          WORKER_PROOF_EVIDENCE_PATH: worker_proof_evidence.json
+        run: python3 scripts/worker_proof_01.py
+
+      - name: Upload evidence artifact (non-secret)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-proof-01-evidence
+          path: worker_proof_evidence.json
+          retention-days: 7
+          if-no-files-found: warn
