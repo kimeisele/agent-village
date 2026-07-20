@@ -2326,37 +2326,35 @@ Vollständige Suite: 351/351. Ruff/mypy/py_compile grün.
 
 ---
 
-## §38 — Deterministic Bounty Review Recon 01 (2026-07-20, korrigiert)
+## §38 — Deterministic Bounty Review Recon 01 (2026-07-20, zweite Korrektur)
 
 Per Issue #27. Read-only Recon — keine Evaluator-Implementierung.
 
-**Kernbefund:** `SuccessCriterion.met` wird von keinem Produktionscode
-gesetzt. Der Evaluator fehlt, aber auch die autoritative Anwendung,
-immutable Submission-Bindings, Persistenz/Reconciliation und
-External-Side-Effect-Delivery sind noch nicht spezifiziert.
-
-**Spezifikation (korrigiert nach Review):**
-- Tri-State-Evaluator: `PASS` / `FAIL` / `INDETERMINATE` mit
-  maschinenlesbaren Reason-Codes
-- Exakte Parameter-Schemata pro Evaluator-Type mit Unknown-Key-Rejection
-- `village/review_authority.py` als separate Autoritäts-Komponente
-  (nicht `heartbeat.py`)
-- Tamper-evidente Bindings (output_hash, contract_policy_hash,
-  criterion_ids) werden in `bounty_submit()` erfasst — nicht erst
-  bei der Evaluation
-- `evaluation_attempts` (append-only, kann INDETERMINATE enthalten)
-  getrennt vom finalen `review`-Record (`_attach_review`)
-- `criterion_id` (stable Hash) statt Name-basierter Ergebnis-Zuordnung
-- Auto-Accept-Policy (`auto_review_enabled`) — Verträge ohne Kriterien,
-  nur optionale Kriterien oder `evaluator=None`-Pflichtkriterien
-  ergeben INDETERMINATE
-- Crash-Recovery-Matrix für 5 Abbruch-Zeitpunkte
-- GitHub Issues sind nicht-authoritative Downstream-Effekte; API-Failure
-  darf kanonische Completion nicht beeinflussen
-- Manuelle CLI ist interim human review entry point — nicht authentifiziert
-
-**Empfohlener Implementierungs-Slice:** `village/evaluator.py` (neu),
-`village/review_authority.py` (neu), SuccessCriterion.criterion_id,
-`auto_review_enabled`, Binding-Capture in `bounty_submit()`,
-`evaluation_attempts`-Persistenz, Heartbeat-Verdrahtung,
-Crash-Recovery, Authority-Boundary-Tests. Keine Produktionsaktivierung.
+**Spezifikation (zweite Korrektur nach Review):**
+- Exakte Evaluator-to-Review-API: `FinalEvaluation` (immutable frozen
+  dataclass) als einziges Artefakt zwischen Evaluator und Review Authority.
+  `finalize_review()` lädt Submission/Bounty/Contract frisch, validiert
+  alle Bindings, wendet Criterion-Outcomes selbst an.
+- Kein caller-mutiertes Contract-Objekt, kein unabhängiges Pre-Review-
+  Persistieren von `criterion.met`.
+- Idempotentes Finalization-Protokoll: `FinalizationIntent`-Journal
+  (append-only) vor Multi-File-Mutation. Crash-Recovery-Matrix für 6
+  Abbruch-Zeitpunkte mit Replay-Mechanismus.
+- `reconcile_review_issue_effects()` als separate Funktion für GitHub
+  Downstream-Delivery. Stabile Marker pro Evaluation-Attempt und
+  Final-Verdict. Delivery-State-Persistenz. GitHub bleibt
+  nicht-authoritativ.
+- `criterion_id` als opaque stabile ID (einmal vergeben, nie aus
+  mutablen Feldern neu berechnet). Separater `criterion_definition_hash`
+  für Änderungserkennung.
+- Exakter kanonischer Review-Policy-Hash: `auto_review_enabled`,
+  criterion IDs, required flags, evaluator types, evaluator params,
+  policy_schema_version. Explizit ausgeschlossen: `met`, `name`,
+  `description`, `weight`.
+- Vollständige Evaluator-Parameter-Bounds: max path length/depth/segment,
+  dict-only traversal, max string value, finite-number requirement,
+  strict type equality (bool ≠ int), max min_count, _SENTINEL vs None.
+- Korrigierte Mutation-Path-Inventur: `bounty_review()` ruft
+  `contract.fulfill()` direkt auf (accept path, line 343).
+- BEFUND §38 dokumentiert Handoff/Crash-Recovery/GitHub-Reconciliation
+  als spezifiziert aber noch nicht implementiert.
