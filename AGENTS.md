@@ -9,7 +9,7 @@ role, and continue the established Lead/Build workflow.
 Existing SPEC, architecture, BEFUND, research, Issue, PR, code, test, and CI
 artifacts remain the sources for project-specific knowledge. Do not create
 additional governance, north-star, process, or session-handoff files without
-explicit Issue #24 authorization.
+explicit authorization through a dedicated governance Issue.
 
 Communicate with the Human Repository Owner in the user's language unless
 explicitly requested otherwise.

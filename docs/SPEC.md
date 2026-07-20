@@ -2,13 +2,16 @@
 
 Status: **active, iteratively revised since 2026-07-18.** The original header
 ("draft, not yet approved") was written before any code existed. As of 2026-07-20,
-the repository contains production code implementing large portions of this spec
+the repository contains merged implementation code for large portions of this spec
 (heartbeat, brain, bounty board, VillageContract, worker, operator execution,
 submission/review gate, canonical ingress, actor identity, contributions,
-CAPTCHA solving, NADI bridge). The spec has been amended with v1 §1-§6 historical
-record, then later extended with §A-§E, §2.1 migration notes, and inline status
-markers on completed work. Later PRs and BEFUND findings may refine or supersede
-specific sections. See `docs/BEFUND.md` for the implementation timeline.
+CAPTCHA solving, NADI bridge). Implementation presence does not by itself imply
+production activation, full end-to-end wiring, or external proof; those statuses
+are documented separately in BEFUND.md and the relevant Issues and PRs. The spec
+has been amended with v1 §1-§6 historical record, then later extended with §A-§E,
+§2.1 migration notes, and inline status markers on completed work. Later PRs and
+BEFUND findings may refine or supersede specific sections. See
+`docs/BEFUND.md` for the implementation timeline.
 
 ## 0. Scope of this document
 

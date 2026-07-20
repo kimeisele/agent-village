@@ -2272,10 +2272,11 @@ and workflow-governance document. Performed document-status audit on
 **Status corrections:**
 - `docs/SPEC.md` header updated from "draft, not yet approved" to
   "active, iteratively revised since 2026-07-18" — the original header
-  was objectively false: code has been in production since migration,
-  22 PRs merged, CI gate established, Branch Protection active.
-  Historical v1 draft context preserved in §0-§6 with an explicit marker
-  at §A ("v1 §1-§6 above stays as historical record").
+  was objectively false: merged implementation code exists since
+  migration (22 PRs merged, CI gate established, Branch Protection
+  active). Implementation presence does not imply production activation,
+  full end-to-end wiring, or external proof. Historical v1 draft context
+  preserved in §0-§6.
 - `docs/ARCHITECTURE_VISION.md` correctly declares itself as vision-only
   — no correction needed.
 
