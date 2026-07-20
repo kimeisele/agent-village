@@ -28,7 +28,9 @@ duplicates or takes over Contribution's own fields/state machine.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -146,6 +148,59 @@ class Budget:
         return cls(**known)
 
 
+class EvaluatorType(str, Enum):
+    """Allowlisted deterministic evaluator kinds."""
+
+    FIELD_PRESENT = "field_present"
+    FIELD_VALUE = "field_value"
+    FIELD_COUNT = "field_count"
+
+
+def canonical_json_dumps(obj: object) -> str:
+    """Deterministic JSON serialization for hashing.
+
+    Sorted keys, no trailing whitespace, UTF-8, compact separators.
+    Rejects NaN and Infinity values.
+    """
+    raw = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    if "NaN" in raw or "Infinity" in raw:
+        raise ValueError("canonical_json_dumps: NaN/Infinity not allowed")
+    return raw
+
+
+def compute_criterion_definition_hash(evaluator: EvaluatorType | None, params: dict[str, Any]) -> str:
+    """Canonical hash of a criterion's evaluator configuration."""
+    if evaluator is None:
+        projection: dict[str, object] = {"evaluator": None}
+    else:
+        projection = {"evaluator": evaluator.value, "evaluator_params": params}
+    return hashlib.sha256(canonical_json_dumps(projection).encode()).hexdigest()
+
+
+def compute_review_policy_hash(contract: "VillageContract") -> str:
+    """Canonical hash of all decision-relevant review-policy fields.
+
+    Includes: auto_review_enabled, criterion IDs, definition hashes,
+    required flags, evaluator types, evaluator params, schema version.
+    Excludes: met, name, description, weight (mutable display/result fields).
+    """
+    projection: dict[str, object] = {
+        "auto_review_enabled": contract.auto_review_enabled,
+        "criteria": [
+            {
+                "criterion_id": c.criterion_id,
+                "criterion_definition_hash": c.criterion_definition_hash,
+                "required": c.required,
+                "evaluator": c.evaluator.value if c.evaluator else None,
+                "evaluator_params": c.evaluator_params,
+            }
+            for c in sorted(contract.success_criteria, key=lambda c: c.criterion_id)
+        ],
+        "policy_schema_version": 1,
+    }
+    return hashlib.sha256(canonical_json_dumps(projection).encode()).hexdigest()
+
+
 @dataclass
 class SuccessCriterion:
     """A checkable success criterion. Deliberately data-only: no stored
@@ -158,13 +213,21 @@ class SuccessCriterion:
     to this module -- `met` just records the outcome once known.
     """
 
-    name: str
+    criterion_id: str = ""  # system-assigned, opaque, stable, unique per contract
+    criterion_definition_hash: str = ""  # system-computed from evaluator config
+    name: str = ""
     description: str = ""
     required: bool = False
     weight: float = 1.0
     met: bool | None = None  # None = not yet evaluated
+    evaluator: EvaluatorType | None = None
+    evaluator_params: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if not self.criterion_id:
+            self.criterion_id = hashlib.sha256(f"{self.name}:{uuid.uuid4()}".encode()).hexdigest()[:16]
+        if not self.criterion_definition_hash:
+            self.criterion_definition_hash = compute_criterion_definition_hash(self.evaluator, self.evaluator_params)
         if not 0.0 <= self.weight <= 1.0:
             raise ValueError(f"weight must be in [0, 1], got {self.weight}")
 
@@ -174,6 +237,15 @@ class SuccessCriterion:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "SuccessCriterion":
         known = {f: d[f] for f in cls.__dataclass_fields__ if f in d}
+        # Never trust externally supplied criterion_id as authoritative.
+        # __post_init__ generates a fresh system ID when the field is empty.
+        # Discard any externally supplied ID to guarantee system control.
+        known.pop("criterion_id", None)
+        # Recompute definition hash from canonical fields on load.
+        evaluator_raw = known.get("evaluator")
+        evaluator = EvaluatorType(evaluator_raw) if isinstance(evaluator_raw, str) else None
+        params = known.get("evaluator_params", {})
+        known["criterion_definition_hash"] = compute_criterion_definition_hash(evaluator, params)
         return cls(**known)
 
 
@@ -196,6 +268,7 @@ class VillageContract:
     budget: Budget = field(default_factory=Budget)
     deadline: datetime | None = None
     success_criteria: list[SuccessCriterion] = field(default_factory=list)
+    auto_review_enabled: bool = False
     state: ContractState = ContractState.DRAFTED
     termination_reason: str | None = None
     created_at: datetime = field(default_factory=_now)

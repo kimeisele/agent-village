@@ -24,13 +24,18 @@ never by the cognitive worker itself.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import time
 from pathlib import Path
 from typing import Any
 
 import village.heartbeat as heartbeat
-from village.contracts import ContractState
+from village.contracts import (
+    ContractState,
+    canonical_json_dumps,
+    compute_review_policy_hash,
+)
 from village.heartbeat import _contract_id_for, _load, _load_contract, _save, _save_contract
 from village.work_result import WorkResult, WorkResultStatus
 
@@ -235,6 +240,13 @@ def bounty_submit(bounty_id: str, actor_id: str, work_result: WorkResult) -> dic
 
     # All validation above is read-only. First write happens here.
     submission_id = _next_submission_id(bounty_id, work_result.execution_id)
+    # Immutable bindings for deterministic review (Issue #34)
+    output_hash = hashlib.sha256(
+        canonical_json_dumps(work_result.output if work_result.output else {}).encode()
+    ).hexdigest()
+    policy_hash = compute_review_policy_hash(contract)
+    criterion_ids = [c.criterion_id for c in contract.success_criteria]
+    criterion_hashes = [c.criterion_definition_hash for c in contract.success_criteria]
     submission = {
         "submission_id": submission_id,
         "bounty_id": bounty_id,
@@ -249,6 +261,10 @@ def bounty_submit(bounty_id: str, actor_id: str, work_result: WorkResult) -> dic
         "evidence": _safe_evidence(work_result.evidence),
         "submitted_at": time.time(),
         "review": None,
+        "output_canonical_hash": output_hash,
+        "review_policy_hash": policy_hash,
+        "criterion_ids": criterion_ids,
+        "criterion_definition_hashes": criterion_hashes,
     }
     _insert_submission(submission)
 

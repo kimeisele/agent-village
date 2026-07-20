@@ -2351,3 +2351,36 @@ Per Issue #27. Read-only Recon — keine Evaluator-Implementierung.
 - Alle vorherigen Korrekturen (immutable FinalEvaluation, criterion_id/
   definition_hash, Policy-Authority-Invariant, Parameter-Bounds,
   GitHub-Downstream-Delivery) bleiben unverändert.
+
+---
+
+## §39 — External Bounty Lifecycle 02B (2026-07-20)
+
+Per Issue #34. Foundation für deterministische Bounty-Auswertung.
+
+**Datenmodell:**
+- `SuccessCriterion` erweitert um `criterion_id` (system-generiert, opaque),
+  `criterion_definition_hash` (system-berechnet), `evaluator` (EvaluatorType|None),
+  `evaluator_params`. Extern gelieferte IDs werden verworfen.
+- `VillageContract.auto_review_enabled` (default `False`). Legacy-Verträge
+  bleiben deaktiviert.
+- `canonical_json_dumps()` für deterministische Hash-Berechnung.
+- `compute_criterion_definition_hash()`, `compute_review_policy_hash()`.
+
+**Submission-Bindings:**
+- `bounty_submit()` persistiert jetzt `output_canonical_hash`,
+  `review_policy_hash`, `criterion_ids`, `criterion_definition_hashes`.
+  Abgeleitet aus kanonischem geladenem State, nicht aus externen Payloads.
+
+**Evaluator (village/evaluator.py):**
+- `EvalResult`: PASS, FAIL, INDETERMINATE.
+- 3 allowlisted Types: FIELD_PRESENT, FIELD_VALUE, FIELD_COUNT.
+- Exakte Parameter-Bounds: max Pfad-Länge/Segmente/Zeichen,
+  strict type equality (bool ≠ int), _SENTINEL vs None, unknown-key Rejection.
+- Pure: kein I/O, keine State-Mutation, nie LLM, nie freier Text.
+
+**Nicht implementiert:** automatisches Review, FinalEvaluation,
+Finalization-Journal, Contract-Fulfillment, Bounty-Completion.
+`bounty_review()` bleibt alleinige terminale Autorität.
+
+**Tests:** 26 neue in `test_evaluator.py`. Vollständige Suite: 377/377.
