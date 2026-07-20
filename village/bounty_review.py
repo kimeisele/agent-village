@@ -252,6 +252,7 @@ def bounty_submit(bounty_id: str, actor_id: str, work_result: WorkResult) -> dic
         "bounty_id": bounty_id,
         "work_result_id": work_result.work_result_id,
         "contract_id": work_result.contract_id,
+        "contract_version": contract.version,
         "execution_id": work_result.execution_id,
         "actor_id": actor_id,
         "provider": work_result.provider,

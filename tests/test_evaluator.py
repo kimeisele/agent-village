@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from village.contracts import EvaluatorType, SuccessCriterion
 from village.evaluator import EvalResult, evaluate_criterion
 
@@ -184,22 +186,40 @@ class TestEvaluatorPurity:
 
 class TestCriterionIdentity:
     def test_duplicate_definitions_get_distinct_ids(self):
-        a = SuccessCriterion(name="same", required=True)
-        b = SuccessCriterion(name="same", required=True)
+        a = SuccessCriterion.from_untrusted_terms({"name": "same", "required": True})
+        b = SuccessCriterion.from_untrusted_terms({"name": "same", "required": True})
         assert a.criterion_id != b.criterion_id
 
     def test_externally_supplied_id_discarded(self):
-        c = SuccessCriterion.from_dict({"criterion_id": "external", "name": "test", "description": ""})
+        c = SuccessCriterion.from_untrusted_terms({"criterion_id": "external", "name": "test", "description": ""})
         assert c.criterion_id != "external"
 
     def test_definition_hash_computed(self):
-        c = SuccessCriterion(
-            name="test",
-            evaluator=EvaluatorType.FIELD_PRESENT,
-            evaluator_params={"field": "gaps"},
+        c = SuccessCriterion.from_untrusted_terms(
+            {"name": "test", "evaluator": "field_present", "evaluator_params": {"field": "gaps"}}
         )
         assert c.criterion_definition_hash
         assert len(c.criterion_definition_hash) == 64  # sha256 hex
+
+    def test_persisted_id_survives_roundtrip(self):
+        """criterion_id is preserved through canonical save/load."""
+        c = SuccessCriterion.from_untrusted_terms(
+            {"name": "test", "evaluator": "field_present", "evaluator_params": {"field": "x"}}
+        )
+        d = c.to_dict()
+        restored = SuccessCriterion.from_persisted_dict(d)
+        assert restored.criterion_id == c.criterion_id
+        assert restored.criterion_definition_hash == c.criterion_definition_hash
+
+    def test_persisted_hash_mismatch_fails_closed(self):
+        """A corrupted definition_hash in persisted data fails closed."""
+        c = SuccessCriterion.from_untrusted_terms(
+            {"name": "test", "evaluator": "field_present", "evaluator_params": {"field": "x"}}
+        )
+        d = c.to_dict()
+        d["criterion_definition_hash"] = "0" * 64
+        with pytest.raises(ValueError, match="criterion_definition_hash mismatch"):
+            SuccessCriterion.from_persisted_dict(d)
 
 
 # ── Evaluator does NOT mutate input ───────────────────────────

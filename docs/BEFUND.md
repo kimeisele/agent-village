@@ -2354,33 +2354,34 @@ Per Issue #27. Read-only Recon — keine Evaluator-Implementierung.
 
 ---
 
-## §39 — External Bounty Lifecycle 02B (2026-07-20)
+## §39 — External Bounty Lifecycle 02B (2026-07-20, korrigiert)
 
 Per Issue #34. Foundation für deterministische Bounty-Auswertung.
 
-**Datenmodell:**
-- `SuccessCriterion` erweitert um `criterion_id` (system-generiert, opaque),
-  `criterion_definition_hash` (system-berechnet), `evaluator` (EvaluatorType|None),
-  `evaluator_params`. Extern gelieferte IDs werden verworfen.
-- `VillageContract.auto_review_enabled` (default `False`). Legacy-Verträge
-  bleiben deaktiviert.
-- `canonical_json_dumps()` für deterministische Hash-Berechnung.
-- `compute_criterion_definition_hash()`, `compute_review_policy_hash()`.
+**Datenmodell (korrigiert nach Review):**
+- `SuccessCriterion.from_untrusted_terms()` — für externe contract_terms.
+  Ignoriert gelieferte IDs, validiert Evaluator-Type und Parameter-Schema.
+- `SuccessCriterion.from_persisted_dict()` — für kanonische Persistenz.
+  Bewahrt criterion_id, prüft definition_hash, fail-closed bei Mismatch.
+  Legacy-Kriterien ohne ID erhalten eine neue.
+- `criterion_id` überlebt kanonischen Save/Load unverändert.
+- `VillageContract.auto_review_enabled` in to_dict/from_dict/known_fields.
+  Fehlendes Legacy-Feld → False, malformed → ValueError.
+- `canonical_json_dumps()` mit `allow_nan=False` (strikte Serialisierung,
+  keine String-Scans).
 
 **Submission-Bindings:**
-- `bounty_submit()` persistiert jetzt `output_canonical_hash`,
-  `review_policy_hash`, `criterion_ids`, `criterion_definition_hashes`.
-  Abgeleitet aus kanonischem geladenem State, nicht aus externen Payloads.
+- 10 Felder: submission_id, bounty_id, contract_id, contract_version,
+  work_result_id, execution_id, output_canonical_hash, review_policy_hash,
+  criterion_ids, criterion_definition_hashes.
 
 **Evaluator (village/evaluator.py):**
-- `EvalResult`: PASS, FAIL, INDETERMINATE.
-- 3 allowlisted Types: FIELD_PRESENT, FIELD_VALUE, FIELD_COUNT.
-- Exakte Parameter-Bounds: max Pfad-Länge/Segmente/Zeichen,
-  strict type equality (bool ≠ int), _SENTINEL vs None, unknown-key Rejection.
-- Pure: kein I/O, keine State-Mutation, nie LLM, nie freier Text.
+- Prüft `isinstance(output, dict)` und `isinstance(params, dict)` vor
+  jedem Zugriff (fail-closed, nie Raise).
+- Unknown/Corrupt-Evaluator in Persistenz → non-automatable.
 
 **Nicht implementiert:** automatisches Review, FinalEvaluation,
 Finalization-Journal, Contract-Fulfillment, Bounty-Completion.
-`bounty_review()` bleibt alleinige terminale Autorität.
 
-**Tests:** 26 neue in `test_evaluator.py`. Vollständige Suite: 377/377.
+**Tests:** 28 neue (identity, hash-mismatch, persisted-id, auto_review_enabled).
+Vollständige Suite: 379/379. Ruff/mypy/py_compile grün.

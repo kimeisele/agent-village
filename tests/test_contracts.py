@@ -262,19 +262,14 @@ def test_child_budget_dimension_left_none_is_fine():
 
 def test_json_roundtrip_is_lossless():
     original = _b001_contract(
-        success_criteria=[SuccessCriterion(name="review_posted", required=True, met=True)],
+        success_criteria=[
+            SuccessCriterion.from_untrusted_terms({"name": "review_posted", "required": True, "met": True})
+        ],
         deadline=datetime(2026, 7, 20, 12, 0, 0, tzinfo=timezone.utc),
     )
     restored = VillageContract.from_json(original.to_json())
-    # criterion_id is system-generated and differs per load (by design).
-    # Compare all fields except criterion_id in criteria.
-    od = original.to_dict()
-    rd = restored.to_dict()
-    for orig_c, rest_c in zip(od["success_criteria"], rd["success_criteria"]):
-        assert orig_c["criterion_id"] != rest_c["criterion_id"]  # regenerated
-        del orig_c["criterion_id"]
-        del rest_c["criterion_id"]
-    assert rd == od
+    # criterion_id is preserved through canonical persistence (from_persisted_dict).
+    assert restored.to_dict() == original.to_dict()
 
 
 def test_json_serialization_is_deterministic_across_calls():

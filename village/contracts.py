@@ -160,12 +160,11 @@ def canonical_json_dumps(obj: object) -> str:
     """Deterministic JSON serialization for hashing.
 
     Sorted keys, no trailing whitespace, UTF-8, compact separators.
-    Rejects NaN and Infinity values.
+    Uses allow_nan=False to reject NaN and Infinity at the serialization
+    layer (not via string scanning — ordinary strings containing those
+    words are unaffected).
     """
-    raw = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    if "NaN" in raw or "Infinity" in raw:
-        raise ValueError("canonical_json_dumps: NaN/Infinity not allowed")
-    return raw
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
 
 
 def compute_criterion_definition_hash(evaluator: EvaluatorType | None, params: dict[str, Any]) -> str:
@@ -224,10 +223,6 @@ class SuccessCriterion:
     evaluator_params: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.criterion_id:
-            self.criterion_id = hashlib.sha256(f"{self.name}:{uuid.uuid4()}".encode()).hexdigest()[:16]
-        if not self.criterion_definition_hash:
-            self.criterion_definition_hash = compute_criterion_definition_hash(self.evaluator, self.evaluator_params)
         if not 0.0 <= self.weight <= 1.0:
             raise ValueError(f"weight must be in [0, 1], got {self.weight}")
 
@@ -235,18 +230,76 @@ class SuccessCriterion:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "SuccessCriterion":
-        known = {f: d[f] for f in cls.__dataclass_fields__ if f in d}
-        # Never trust externally supplied criterion_id as authoritative.
-        # __post_init__ generates a fresh system ID when the field is empty.
-        # Discard any externally supplied ID to guarantee system control.
-        known.pop("criterion_id", None)
-        # Recompute definition hash from canonical fields on load.
-        evaluator_raw = known.get("evaluator")
-        evaluator = EvaluatorType(evaluator_raw) if isinstance(evaluator_raw, str) else None
-        params = known.get("evaluator_params", {})
-        known["criterion_definition_hash"] = compute_criterion_definition_hash(evaluator, params)
+    def from_untrusted_terms(cls, d: dict[str, Any]) -> "SuccessCriterion":
+        """Create from external contract_terms. Ignores any supplied
+        criterion_id or criterion_definition_hash — the system owns identity.
+        Validates evaluator type and parameter schema."""
+        known: dict[str, Any] = {f: d[f] for f in ("name", "description", "required", "weight", "met") if f in d}
+        # Parse and validate evaluator
+        evaluator_raw = d.get("evaluator")
+        if evaluator_raw is None:
+            known["evaluator"] = None
+            known["evaluator_params"] = {}
+        elif isinstance(evaluator_raw, str):
+            try:
+                known["evaluator"] = EvaluatorType(evaluator_raw)
+            except ValueError:
+                raise ValueError(f"unknown evaluator type: {evaluator_raw!r}")
+            params = d.get("evaluator_params")
+            if not isinstance(params, dict):
+                raise ValueError("evaluator_params must be a dict")
+            known["evaluator_params"] = params
+        else:
+            raise ValueError(f"evaluator must be a string or null, got {type(evaluator_raw).__name__}")
+        # System-generated identity (never from external input)
+        known["criterion_id"] = hashlib.sha256(f"{known.get('name', '')}:{uuid.uuid4()}".encode()).hexdigest()[:16]
+        known["criterion_definition_hash"] = compute_criterion_definition_hash(
+            known.get("evaluator"), known.get("evaluator_params", {})
+        )
         return cls(**known)
+
+    @classmethod
+    def from_persisted_dict(cls, d: dict[str, Any]) -> "SuccessCriterion":
+        """Create from canonical persistence. Preserves stored criterion_id.
+        Validates evaluator, recomputes definition hash, fails closed on
+        mismatch. Legacy criteria without identity fields load safely but
+        remain ineligible for automatic review."""
+        known: dict[str, Any] = {f: d[f] for f in cls.__dataclass_fields__ if f in d}
+        # Parse evaluator
+        evaluator_raw = known.get("evaluator")
+        if evaluator_raw is None or evaluator_raw == "":
+            known["evaluator"] = None
+            known["evaluator_params"] = {}
+        elif isinstance(evaluator_raw, str):
+            try:
+                known["evaluator"] = EvaluatorType(evaluator_raw)
+            except ValueError:
+                # Corrupt persisted evaluator → load as non-automatable
+                known["evaluator"] = None
+                known["evaluator_params"] = {}
+        params = known.get("evaluator_params", {})
+        if not isinstance(params, dict):
+            params = {}
+        known["evaluator_params"] = params
+        # Validate or generate identity
+        stored_id = known.get("criterion_id", "")
+        if not stored_id or not isinstance(stored_id, str):
+            # Legacy criterion without ID → assign one for future use
+            known["criterion_id"] = hashlib.sha256(
+                f"legacy:{known.get('name', '')}:{uuid.uuid4()}".encode()
+            ).hexdigest()[:16]
+        computed_hash = compute_criterion_definition_hash(known.get("evaluator"), params)
+        stored_hash = known.get("criterion_definition_hash", "")
+        if stored_hash and stored_hash != computed_hash:
+            raise ValueError(
+                f"criterion_definition_hash mismatch for {stored_id!r}: "
+                f"stored={stored_hash[:16]}... computed={computed_hash[:16]}..."
+            )
+        known["criterion_definition_hash"] = computed_hash
+        return cls(**known)
+
+    # Backward-compatible alias used by legacy callers and tests
+    from_dict = from_untrusted_terms
 
 
 @dataclass
@@ -347,6 +400,7 @@ class VillageContract:
             "budget": self.budget.to_dict(),
             "deadline": self.deadline.isoformat() if self.deadline else None,
             "success_criteria": [c.to_dict() for c in self.success_criteria],
+            "auto_review_enabled": self.auto_review_enabled,
             "state": self.state.value,
             "termination_reason": self.termination_reason,
             "created_at": self.created_at.isoformat(),
@@ -373,6 +427,7 @@ class VillageContract:
             "budget",
             "deadline",
             "success_criteria",
+            "auto_review_enabled",
             "state",
             "termination_reason",
             "created_at",
@@ -383,6 +438,14 @@ class VillageContract:
         deadline_dt = datetime.fromisoformat(deadline) if deadline else None
         created_at = d.get("created_at")
         created_at_dt = datetime.fromisoformat(created_at) if created_at else _now()
+
+        auto_review_raw = d.get("auto_review_enabled")
+        if auto_review_raw is None:
+            auto_review = False
+        elif isinstance(auto_review_raw, bool):
+            auto_review = auto_review_raw
+        else:
+            raise ValueError(f"auto_review_enabled must be bool, got {type(auto_review_raw).__name__}")
 
         return cls(
             contract_id=d["contract_id"],
@@ -395,7 +458,8 @@ class VillageContract:
             allowed_resources=list(d.get("allowed_resources", [])),
             budget=Budget.from_dict(d["budget"]) if d.get("budget") else Budget(),
             deadline=deadline_dt,
-            success_criteria=[SuccessCriterion.from_dict(c) for c in d.get("success_criteria", [])],
+            success_criteria=[SuccessCriterion.from_persisted_dict(c) for c in d.get("success_criteria", [])],
+            auto_review_enabled=auto_review,
             state=ContractState(d.get("state", ContractState.DRAFTED.value)),
             termination_reason=d.get("termination_reason"),
             created_at=created_at_dt,

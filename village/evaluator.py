@@ -77,6 +77,10 @@ def evaluate_criterion(criterion: SuccessCriterion, output: dict[str, Any]) -> E
     evaluator = criterion.evaluator
     params = criterion.evaluator_params
 
+    if not isinstance(output, dict):
+        return EvalResult.INDETERMINATE
+    if not isinstance(params, dict):
+        return EvalResult.INDETERMINATE
     if evaluator is None:
         return EvalResult.INDETERMINATE
 
