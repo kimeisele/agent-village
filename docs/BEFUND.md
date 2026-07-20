@@ -2323,3 +2323,31 @@ Kein Deadline-Enforcement.
 
 **Tests:** 24 neue Tests in `test_external_bounty_lifecycle_01a.py`.
 Vollständige Suite: 351/351. Ruff/mypy/py_compile grün.
+
+---
+
+## §38 — Deterministic Bounty Review Recon 01 (2026-07-20, vierte Korrektur)
+
+Per Issue #27. Read-only Recon — keine Evaluator-Implementierung.
+
+**Spezifikation (vierte Korrektur nach Review):**
+- `bounty_review()` bleibt die einzige terminale Autorität für alle
+  Review-Pfade. Akzeptiert discriminated Input: `FinalEvaluation` für
+  automatisches Review, `ManualReviewRequest` für manuelles CLI.
+- Für automatisches Review lädt `bounty_review()` Submission/Bounty/
+  Contract frisch, validiert alle Bindings, wendet Criterion-Outcomes
+  an, schreibt Finalization-Record, attached Review, fulfilled Contract
+  (accept) oder lässt ihn ACTIVE (reject), aktualisiert Bounty.
+- Kein `apply_review_decision()` als separate Autorität. Ein
+  Review-Authority-Helper darf als nicht-authoritativer privater Adapter
+  existieren, der `FinalEvaluation` vorbereitet und an `bounty_review()`
+  delegiert — aber niemals `contract.fulfill()`, `_attach_review()` oder
+  Contract/Bounty-Persistenz selbst aufruft.
+- Manual CLI bleibt Caller, nicht separate Mutations-Autorität.
+- Finalization-Record: ein mutabler Record pro Submission, Key
+  `finalize:<submission_id>`, Stages: prepared → review_attached →
+  contract_applied → bounty_applied → complete (oder failed_closed).
+- Crash-Recovery an Write-Order von `bounty_review()` gebunden.
+- Alle vorherigen Korrekturen (immutable FinalEvaluation, criterion_id/
+  definition_hash, Policy-Authority-Invariant, Parameter-Bounds,
+  GitHub-Downstream-Delivery) bleiben unverändert.
