@@ -2,5 +2,6 @@
   "registration": {},
   "bounty_claim": {},
   "bounty_reject": {},
-  "bounty_done": {}
+  "bounty_done": {},
+  "bounty_done_reject": {}
 }

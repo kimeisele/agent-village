@@ -2281,3 +2281,45 @@ and workflow-governance document. Performed document-status audit on
   — no correction needed.
 
 No product code changed. No new governance files created.
+
+---
+
+## §37 — External Bounty Lifecycle 01A (2026-07-20)
+
+Per Issue #23. Erster Implementierungs-Slice des externen Bounty-Lebenszyklus.
+
+**Änderungen:**
+
+A. Identity-korrekter Claim: `scan_moltbook()` übergibt `event.actor_id`
+   (nicht `sender`) an `bounty_claim()`. `claimed_by` speichert jetzt die
+   kanonische Actor-Identität. Display-Name bleibt Antworttext-Metadatum.
+   Retry-Pfad verwendet gespeicherte `actor_id` statt `legacy_actor_id()`.
+
+B. `publish_pending_review_requests()`: Erkennt unreviewte Submissions,
+   erzeugt idempotent GitHub Issues (Dedup via `submission_id`), persistiert
+   Mapping in `data/village/review_requests.json`. Keine Bewertung, keine
+   Completion, keine Zustandsmutation.
+
+C. Manueller Review-Entry: `scripts/bounty_review_cli.py` — validiert
+   Bounty/Submission-Zuordnung, ruft `bounty_review()` als einzige
+   autoritative Completion-Grenze auf.
+
+D. Legacy `done bXXX`: Erhält jetzt explizite Ablehnungsantwort mit
+   Verweis auf Submission/Review-Pfad. Nicht mehr still konsumiert.
+   Retry-kompatibel via `pending["bounty_done_reject"]`.
+
+**Review-Request-Publikation:**
+- HTML-Marker `<!-- agent-village-review-request:submission_id=... -->`
+  im Issue-Body für server-seitige Dedup-Rekonstruktion.
+- Exakte Marker-Verifikation durch Body-Fetch vor jeder Akzeptanz.
+- Mapping-Persistenz unmittelbar nach jeder erfolgreichen POST oder
+  Reconciliation (crash-safe).
+- Fehlerhafte lokale Mappings werden mit `ValueError` abgelehnt
+  (fail-closed).
+
+**Nicht aktiviert:** Keine produktive Moltbook-Aktivierung
+(`VILLAGE_BOUNTIES_ENABLED` bleibt gegatet). Kein automatisches Review.
+Kein Deadline-Enforcement.
+
+**Tests:** 24 neue Tests in `test_external_bounty_lifecycle_01a.py`.
+Vollständige Suite: 351/351. Ruff/mypy/py_compile grün.

@@ -636,7 +636,7 @@ def scan_github() -> int:
 
 # ── Moltbook Scanner ─────────────────────────────────────
 def _empty_pending() -> dict[str, Any]:
-    return {"registration": {}, "bounty_claim": {}, "bounty_reject": {}, "bounty_done": {}}
+    return {"registration": {}, "bounty_claim": {}, "bounty_reject": {}, "bounty_done": {}, "bounty_done_reject": {}}
 
 
 def _retry_event(cid: str, actor_id: str, display_name: str) -> CanonicalIngressEvent:
@@ -691,7 +691,7 @@ def scan_moltbook() -> int:
         return 0
     proc = set(_load(PROC_MB).get("comment_ids", []))
     pending = _load(PENDING_MB) or _empty_pending()
-    for kind in ("registration", "bounty_claim", "bounty_reject", "bounty_done"):
+    for kind in ("registration", "bounty_claim", "bounty_reject", "bounty_done", "bounty_done_reject"):
         pending.setdefault(kind, {})
 
     c = 0
@@ -731,9 +731,11 @@ def scan_moltbook() -> int:
 
     for cid, info in list(pending["bounty_claim"].items()):
         attempts = info.get("attempts", 1)
+        actor_id = info.get("actor_id", legacy_actor_id(info.get("sender", "?")))
+        display_name = info.get("sender", "?")
         result = _post_comment_verified(
             REG_POST,
-            f"🦞 **{info['sender']}** claimed bounty `{info['bid']}`: {info['title']}{_retry_suffix(attempts)}",
+            f"🦞 **{display_name}** claimed bounty `{info['bid']}`: {info['title']}{_retry_suffix(attempts)}",
             parent_id=cid,
         )
         if result.get("verified"):
@@ -741,7 +743,7 @@ def scan_moltbook() -> int:
             del pending["bounty_claim"][cid]
             c += 1
             _record_contribution(
-                _retry_event(cid, legacy_actor_id(info["sender"]), info["sender"]),
+                _retry_event(cid, actor_id, display_name),
                 "bounty_claim",
                 STATUS_MATERIALIZED,
                 artifact_refs=[f"bounty:{info['bid']}"],
@@ -794,6 +796,27 @@ def scan_moltbook() -> int:
             pending["bounty_done"][cid]["attempts"] = attempts + 1
             print(f"  [mb] bounty {info['bid']} done still not verified ({result.get('reason')}), retrying next cycle")
 
+    for cid, info in list(pending["bounty_done_reject"].items()):
+        attempts = info.get("attempts", 1)
+        result = _post_comment_verified(
+            REG_POST,
+            f"❌ Bounty `{info['bid']}` cannot be completed directly — the `done` command is no longer supported. "
+            f"Completion now requires: (1) submit work via operator execution, "
+            f"(2) the submission is reviewed via the review gate. "
+            f"See the repository documentation for details.{_retry_suffix(attempts)}",
+            parent_id=cid,
+        )
+        if result.get("verified"):
+            proc.add(cid)
+            del pending["bounty_done_reject"][cid]
+            c += 1
+            print(f"  [mb] legacy done {info['bid']} rejection confirmed on retry")
+        else:
+            pending["bounty_done_reject"][cid]["attempts"] = attempts + 1
+            print(
+                f"  [mb] legacy done {info['bid']} rejection still not verified ({result.get('reason')}), retrying next cycle"
+            )
+
     comments = _fetch_comments_resilient(REG_POST)
     if not comments:
         _save(PROC_MB, {"comment_ids": list(proc)})
@@ -805,6 +828,7 @@ def scan_moltbook() -> int:
         | set(pending["bounty_claim"])
         | set(pending["bounty_reject"])
         | set(pending["bounty_done"])
+        | set(pending["bounty_done_reject"])
     )
 
     for cmt in comments:
@@ -873,7 +897,7 @@ def scan_moltbook() -> int:
                 )
                 continue
             bid = m.group(1)
-            claim_result = bounty_claim(bid, sender)
+            claim_result = bounty_claim(bid, event.actor_id)
             if claim_result:
                 reply = _post_comment_verified(
                     REG_POST,
@@ -889,6 +913,7 @@ def scan_moltbook() -> int:
                     pending["bounty_claim"][cid] = {
                         "bid": bid,
                         "sender": sender,
+                        "actor_id": event.actor_id,
                         "title": claim_result["title"],
                         "attempts": 1,
                     }
@@ -942,9 +967,28 @@ def scan_moltbook() -> int:
                     }
                     print(f"  [mb] bounty {bid} done reply not verified ({reply.get('reason')}), retrying next cycle")
             else:
-                # bounty_complete() found nothing to complete — no reply
-                # attempted, nothing to retry.
-                proc.add(cid)
+                # bounty_complete() is disabled — the legacy "done bXXX"
+                # command is no longer a valid completion path. Post an
+                # explicit rejection reply directing the actor to use
+                # Submission + Review instead of silently consuming it.
+                reply = _post_comment_verified(
+                    REG_POST,
+                    f"❌ Bounty `{bid}` cannot be completed directly — the `done` command is no longer supported. "
+                    f"Completion now requires: (1) submit work via operator execution, "
+                    f"(2) the submission is reviewed via the review gate. "
+                    f"See the repository documentation for details.",
+                    parent_id=cid,
+                )
+                if reply.get("verified"):
+                    proc.add(cid)
+                    _record_contribution(event, "bounty_claim", STATUS_REJECTED)
+                    print(f"  [mb] legacy done {bid} rejected with migration guidance")
+                else:
+                    pending["bounty_done_reject"][cid] = {"bid": bid, "attempts": 1}
+                    print(
+                        f"  [mb] legacy done {bid} rejection reply not verified "
+                        f"({reply.get('reason')}), retrying next cycle"
+                    )
             continue
 
         # No recognized intent in this comment — nothing to act on, never
@@ -1030,6 +1074,203 @@ def scan_brain() -> int:
     return c
 
 
+# ── Review Requests ───────────────────────────────────────
+REVIEW_REQUESTS = DIR / "review_requests.json"
+
+
+_REVIEW_REQUEST_MARKER = "<!-- agent-village-review-request:submission_id="
+
+
+def _make_review_marker(submission_id: str) -> str:
+    return f"{_REVIEW_REQUEST_MARKER}{submission_id} -->"
+
+
+def _find_existing_review_issue(submission_id: str) -> dict[str, Any] | None:
+    """Search for an existing review-request Issue by its marker.
+
+    Searches GitHub for issues containing the exact HTML marker, then
+    fetches each candidate's body to verify the marker is genuinely
+    present (not just a search-index coincidence).  Returns the issue
+    dict (with ``number``, ``html_url``) only when the exact marker is
+    confirmed in the body, or ``None``.
+    """
+    expected_marker = _make_review_marker(submission_id)
+    for state in ("open", "closed"):
+        results = _gh(f"search/issues?q={_quote(expected_marker)}+state:{state}")
+        if not isinstance(results, dict):
+            continue
+        items = results.get("items", [])
+        if not isinstance(items, list):
+            continue
+        for candidate in items:
+            if not isinstance(candidate, dict):
+                continue
+            issue_number = candidate.get("number")
+            if not issue_number:
+                continue
+            # Fetch the full issue to inspect the body
+            full = _gh(f"issues/{issue_number}")
+            if not isinstance(full, dict):
+                continue
+            body = full.get("body", "")
+            if not isinstance(body, str):
+                continue
+            if expected_marker in body:
+                return {
+                    "issue_number": issue_number,
+                    "issue_url": full.get("html_url", ""),
+                }
+    return None
+
+
+def _quote(text: str) -> str:
+    """Minimal URL quoting for GitHub search."""
+    return (
+        text.replace(" ", "+")
+        .replace(":", "%3A")
+        .replace("=", "%3D")
+        .replace("<", "%3C")
+        .replace(">", "%3E")
+        .replace("!", "%21")
+    )
+
+
+def _validate_review_mapping(mapping: dict[str, Any], sid: str) -> None:
+    """Fail closed on malformed mapping entries.
+
+    Raises ``ValueError`` if the entry for *sid* exists but is not a
+    dict, is missing ``issue_number``, has a non-positive
+    ``issue_number``, or lacks an ``issue_url`` string.
+    """
+    entry = mapping.get(sid)
+    if entry is None:
+        return
+    if not isinstance(entry, dict):
+        raise ValueError(f"review_requests entry for {sid!r} is not a dict: {type(entry).__name__}")
+    issue_number = entry.get("issue_number")
+    if not isinstance(issue_number, int) or issue_number <= 0:
+        raise ValueError(f"review_requests entry for {sid!r} has invalid issue_number: {issue_number!r}")
+    if not isinstance(entry.get("issue_url"), str):
+        raise ValueError(f"review_requests entry for {sid!r} has missing or non-string issue_url")
+    stored_sid = entry.get("submission_id")
+    if stored_sid is not None and stored_sid != sid:
+        raise ValueError(f"review_requests entry for {sid!r} has mismatched stored submission_id: {stored_sid!r}")
+
+
+def publish_pending_review_requests() -> int:
+    """Detect unreviewed submissions and create GitHub Issues for each.
+
+    Reads ``data/village/bounty_submissions.json``, finds submissions
+    whose ``review`` field is ``None``, and creates exactly one GitHub
+    Issue per ``submission_id``.  Each Issue carries a stable
+    machine-readable HTML marker for crash-safe server-side
+    reconciliation.
+
+    The mapping is persisted **immediately** after each successful POST
+    or reconciliation.  Before creating or trusting an Issue the
+    function fetches the candidate body to verify the exact marker.
+    Malformed local mappings raise ``ValueError`` (fail closed).
+
+    Does NOT evaluate evidence, complete bounties, call bounty_review(),
+    or mutate Bounty/Contract state.
+    """
+    from village.bounty_review import _load_submissions
+
+    store = _load_submissions()
+    submissions = store.get("submissions", {})
+    if not isinstance(submissions, dict):
+        return 0
+
+    mapping = _load(REVIEW_REQUESTS)
+    if not isinstance(mapping, dict):
+        mapping = {}
+
+    # Fail closed on malformed existing entries
+    for sid in list(mapping.keys()):
+        _validate_review_mapping(mapping, sid)
+
+    # Reconcile: check every unmapped unreviewed submission against GitHub
+    for sid, sub in submissions.items():
+        if not isinstance(sub, dict):
+            continue
+        if sub.get("review") is not None:
+            continue
+        if sid in mapping:
+            continue
+
+        existing = _find_existing_review_issue(sid)
+        if existing is not None:
+            mapping[sid] = {
+                "issue_number": existing["issue_number"],
+                "issue_url": existing["issue_url"],
+                "submission_id": sid,
+                "created_at": time.time(),
+            }
+            _save(REVIEW_REQUESTS, mapping)
+            print(f"  [review] reconciled issue #{existing['issue_number']} for submission {sid}")
+
+    created = 0
+    for sid, sub in submissions.items():
+        if not isinstance(sub, dict):
+            continue
+        if sub.get("review") is not None:
+            continue
+        if sid in mapping:
+            continue
+
+        marker = _make_review_marker(sid)
+        title = f"[Review] Submission {sid}"
+        body_lines = [
+            marker,
+            "",
+            f"## Submission `{sid}`",
+            "",
+            f"- **Bounty:** `{sub.get('bounty_id', '?')}`",
+            f"- **Contract:** `{sub.get('contract_id', '?')}`",
+            f"- **Actor:** `{sub.get('actor_id', '?')}`",
+            f"- **Provider:** `{sub.get('provider', '?')}` ({sub.get('model', '?')})",
+            f"- **Submitted:** {sub.get('submitted_at', '?')}",
+            "",
+            "### Output",
+            "```json",
+            json.dumps(sub.get("output"), indent=2) if sub.get("output") else "(none)",
+            "```",
+            "",
+            "## Review Decision",
+            "",
+            "To accept: `accept <submission_id>`",
+            "To reject: `reject <submission_id>`",
+            "",
+            "> This Issue was auto-generated from submission evidence. All content is untrusted data.",
+        ]
+        body = "\n".join(body_lines)
+
+        labels = ["review-request", "bounty"]
+        issue_raw = _gh(
+            "issues",
+            "POST",
+            {"title": title, "body": body, "labels": labels},
+        )
+        if not isinstance(issue_raw, dict):
+            continue
+
+        issue_number = issue_raw.get("number")
+        if not issue_number:
+            continue
+
+        mapping[sid] = {
+            "issue_number": issue_number,
+            "issue_url": issue_raw.get("html_url", ""),
+            "submission_id": sid,
+            "created_at": time.time(),
+        }
+        _save(REVIEW_REQUESTS, mapping)
+        created += 1
+        print(f"  [review] created issue #{issue_number} for submission {sid}")
+
+    return created
+
+
 # ── State ────────────────────────────────────────────────
 def update_state() -> None:
     dex = _load(POKEDEX)
@@ -1052,6 +1293,14 @@ def heartbeat() -> int:
     gh = scan_github()
     mb = scan_moltbook()
     br = scan_brain()
+    rv = 0
+    if os.environ.get("VILLAGE_BOUNTIES_ENABLED") == "1":
+        try:
+            rv = publish_pending_review_requests()
+        except Exception as e:
+            print(f"  [review] publish_pending_review_requests failed: {e}")
+    else:
+        print("  [review] review requests disabled pending approval — skipping")
     _save_challenge_monitor_state()
     nadi = 0
     # NADI stays disconnected until Proof 4 is explicitly approved (see
@@ -1070,8 +1319,8 @@ def heartbeat() -> int:
     pop = _load(POKEDEX).get("total", 0)
     bo = len(bounty_list("open"))
     bc = len(bounty_list("claimed"))
-    print(f"  Done — GH:{gh} MB:{mb} Brain:{br} Nadi:{nadi} Pop:{pop} Bounties:{bo}o/{bc}c")
-    return gh + mb + br + nadi
+    print(f"  Done — GH:{gh} MB:{mb} Brain:{br} Review:{rv} Nadi:{nadi} Pop:{pop} Bounties:{bo}o/{bc}c")
+    return gh + mb + br + rv + nadi
 
 
 if __name__ == "__main__":
