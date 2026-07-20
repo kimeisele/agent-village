@@ -2326,26 +2326,37 @@ Vollständige Suite: 351/351. Ruff/mypy/py_compile grün.
 
 ---
 
-## §38 — Deterministic Bounty Review Recon 01 (2026-07-20)
+## §38 — Deterministic Bounty Review Recon 01 (2026-07-20, korrigiert)
 
 Per Issue #27. Read-only Recon — keine Evaluator-Implementierung.
 
 **Kernbefund:** `SuccessCriterion.met` wird von keinem Produktionscode
-gesetzt. Ohne Evaluator kann `contract.fulfill()` für jeden Contract mit
-`required=True`-Kriterien niemals erfolgreich sein — das `met`-Feld
-bleibt dauerhaft `None`. Der Evaluator ist das einzige fehlende Stück
-im Bounty-Lebenszyklus.
+gesetzt. Der Evaluator fehlt, aber auch die autoritative Anwendung,
+immutable Submission-Bindings, Persistenz/Reconciliation und
+External-Side-Effect-Delivery sind noch nicht spezifiziert.
 
-**Spezifikation:**
-- 3 allowlisted Evaluator-Types: `FIELD_PRESENT`, `FIELD_VALUE`, `FIELD_COUNT`
-- Erweiterter `SuccessCriterion` mit `evaluator`- und `evaluator_params`-Feldern
-- 3 fail-closed Outcomes: `accept`, `reject`, `indeterminate`
-- Evaluator strikt getrennt von Worker, Orchestrator, Cognitive Provider
-- Evidence-Binding an submission_id, work_result_id, output_hash,
-  contract_version
-- Review-Request-Issues werden zu Audit-/Exception-/Break-Glass-Surface
-- `bounty_review()` bleibt einzige Completion-Grenze
+**Spezifikation (korrigiert nach Review):**
+- Tri-State-Evaluator: `PASS` / `FAIL` / `INDETERMINATE` mit
+  maschinenlesbaren Reason-Codes
+- Exakte Parameter-Schemata pro Evaluator-Type mit Unknown-Key-Rejection
+- `village/review_authority.py` als separate Autoritäts-Komponente
+  (nicht `heartbeat.py`)
+- Tamper-evidente Bindings (output_hash, contract_policy_hash,
+  criterion_ids) werden in `bounty_submit()` erfasst — nicht erst
+  bei der Evaluation
+- `evaluation_attempts` (append-only, kann INDETERMINATE enthalten)
+  getrennt vom finalen `review`-Record (`_attach_review`)
+- `criterion_id` (stable Hash) statt Name-basierter Ergebnis-Zuordnung
+- Auto-Accept-Policy (`auto_review_enabled`) — Verträge ohne Kriterien,
+  nur optionale Kriterien oder `evaluator=None`-Pflichtkriterien
+  ergeben INDETERMINATE
+- Crash-Recovery-Matrix für 5 Abbruch-Zeitpunkte
+- GitHub Issues sind nicht-authoritative Downstream-Effekte; API-Failure
+  darf kanonische Completion nicht beeinflussen
+- Manuelle CLI ist interim human review entry point — nicht authentifiziert
 
 **Empfohlener Implementierungs-Slice:** `village/evaluator.py` (neu),
-SuccessCriterion-Erweiterung, `scan_pending_reviews()`, Issue-Update,
-Authority-Boundary-Tests. Keine Produktionsaktivierung.
+`village/review_authority.py` (neu), SuccessCriterion.criterion_id,
+`auto_review_enabled`, Binding-Capture in `bounty_submit()`,
+`evaluation_attempts`-Persistenz, Heartbeat-Verdrahtung,
+Crash-Recovery, Authority-Boundary-Tests. Keine Produktionsaktivierung.
