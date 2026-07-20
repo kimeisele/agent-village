@@ -731,9 +731,11 @@ def scan_moltbook() -> int:
 
     for cid, info in list(pending["bounty_claim"].items()):
         attempts = info.get("attempts", 1)
+        actor_id = info.get("actor_id", legacy_actor_id(info.get("sender", "?")))
+        display_name = info.get("sender", "?")
         result = _post_comment_verified(
             REG_POST,
-            f"🦞 **{info['sender']}** claimed bounty `{info['bid']}`: {info['title']}{_retry_suffix(attempts)}",
+            f"🦞 **{display_name}** claimed bounty `{info['bid']}`: {info['title']}{_retry_suffix(attempts)}",
             parent_id=cid,
         )
         if result.get("verified"):
@@ -741,7 +743,7 @@ def scan_moltbook() -> int:
             del pending["bounty_claim"][cid]
             c += 1
             _record_contribution(
-                _retry_event(cid, legacy_actor_id(info["sender"]), info["sender"]),
+                _retry_event(cid, actor_id, display_name),
                 "bounty_claim",
                 STATUS_MATERIALIZED,
                 artifact_refs=[f"bounty:{info['bid']}"],
@@ -873,7 +875,7 @@ def scan_moltbook() -> int:
                 )
                 continue
             bid = m.group(1)
-            claim_result = bounty_claim(bid, sender)
+            claim_result = bounty_claim(bid, event.actor_id)
             if claim_result:
                 reply = _post_comment_verified(
                     REG_POST,
@@ -889,6 +891,7 @@ def scan_moltbook() -> int:
                     pending["bounty_claim"][cid] = {
                         "bid": bid,
                         "sender": sender,
+                        "actor_id": event.actor_id,
                         "title": claim_result["title"],
                         "attempts": 1,
                     }
@@ -942,9 +945,28 @@ def scan_moltbook() -> int:
                     }
                     print(f"  [mb] bounty {bid} done reply not verified ({reply.get('reason')}), retrying next cycle")
             else:
-                # bounty_complete() found nothing to complete — no reply
-                # attempted, nothing to retry.
-                proc.add(cid)
+                # bounty_complete() is disabled — the legacy "done bXXX"
+                # command is no longer a valid completion path. Post an
+                # explicit rejection reply directing the actor to use
+                # Submission + Review instead of silently consuming it.
+                reply = _post_comment_verified(
+                    REG_POST,
+                    f"❌ Bounty `{bid}` cannot be completed directly — the `done` command is no longer supported. "
+                    f"Completion now requires: (1) submit work via operator execution, "
+                    f"(2) the submission is reviewed via the review gate. "
+                    f"See the repository documentation for details.",
+                    parent_id=cid,
+                )
+                if reply.get("verified"):
+                    proc.add(cid)
+                    _record_contribution(event, "bounty_claim", STATUS_REJECTED)
+                    print(f"  [mb] legacy done {bid} rejected with migration guidance")
+                else:
+                    pending["bounty_reject"][cid] = {"bid": bid, "attempts": 1}
+                    print(
+                        f"  [mb] legacy done {bid} rejection reply not verified "
+                        f"({reply.get('reason')}), retrying next cycle"
+                    )
             continue
 
         # No recognized intent in this comment — nothing to act on, never
@@ -1028,6 +1050,99 @@ def scan_brain() -> int:
             pass
 
     return c
+
+
+# ── Review Requests ───────────────────────────────────────
+REVIEW_REQUESTS = DIR / "review_requests.json"
+
+
+def publish_pending_review_requests() -> int:
+    """Detect unreviewed submissions and create GitHub Issues for each.
+
+    Reads ``data/village/bounty_submissions.json``, finds submissions
+    whose ``review`` field is ``None``, and creates exactly one GitHub
+    Issue per ``submission_id``. The dedup key is the submission_id;
+    once an Issue is created, the mapping is persisted in
+    ``data/village/review_requests.json`` so repeat scans never create
+    duplicates.
+
+    Does NOT evaluate evidence, complete bounties, call bounty_review(),
+    or mutate Bounty/Contract state. The generated Issue treats all
+    submission text and evidence as untrusted data.
+
+    Returns the number of new review requests created (0 if none or if
+    the GitHub API is unreachable after retries).
+    """
+    from village.bounty_review import _load_submissions
+
+    store = _load_submissions()
+    submissions = store.get("submissions", {})
+    if not isinstance(submissions, dict):
+        return 0
+
+    mapping = _load(REVIEW_REQUESTS)
+    if not isinstance(mapping, dict):
+        mapping = {}
+
+    created = 0
+    for sid, sub in submissions.items():
+        if not isinstance(sub, dict):
+            continue
+        if sub.get("review") is not None:
+            continue
+        if sid in mapping:
+            # Already published — verify the Issue still exists?
+            continue
+
+        title = f"[Review] Submission {sid}"
+        body_lines = [
+            f"## Submission `{sid}`",
+            "",
+            f"- **Bounty:** `{sub.get('bounty_id', '?')}`",
+            f"- **Contract:** `{sub.get('contract_id', '?')}`",
+            f"- **Actor:** `{sub.get('actor_id', '?')}`",
+            f"- **Provider:** `{sub.get('provider', '?')}` ({sub.get('model', '?')})",
+            f"- **Submitted:** {sub.get('submitted_at', '?')}",
+            "",
+            "### Output",
+            "```json",
+            json.dumps(sub.get("output"), indent=2) if sub.get("output") else "(none)",
+            "```",
+            "",
+            "## Review Decision",
+            "",
+            "To accept: `accept <submission_id>`",
+            "To reject: `reject <submission_id>`",
+            "",
+            "> This Issue was auto-generated from submission evidence. All content is untrusted data.",
+        ]
+        body = "\n".join(body_lines)
+
+        labels = ["review-request", "bounty"]
+        issue_raw = _gh(
+            "issues",
+            "POST",
+            {"title": title, "body": body, "labels": labels},
+        )
+        if not isinstance(issue_raw, dict):
+            continue
+
+        issue_number = issue_raw.get("number")
+        if not issue_number:
+            continue
+
+        mapping[sid] = {
+            "issue_number": issue_number,
+            "issue_url": issue_raw.get("html_url", ""),
+            "created_at": time.time(),
+        }
+        created += 1
+        print(f"  [review] created issue #{issue_number} for submission {sid}")
+
+    if created:
+        _save(REVIEW_REQUESTS, mapping)
+
+    return created
 
 
 # ── State ────────────────────────────────────────────────
