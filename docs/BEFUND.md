@@ -2243,15 +2243,20 @@ Zustandsübergangstabelle, Authority-Matrix und Bypass-Inventur in
 `docs/research/EXTERNAL_BOUNTY_LIFECYCLE_RECON_01.md`.
 
 **Kernbefunde:**
-- `bounty_complete()` ist totes Code (deaktiviert, kein Bypass).
-- Worker und Orchestrator sind strukturell vom Review-Gate getrennt
-  (17 AST-Tests belegen dies).
+- **ACTIVE DESIGN DEFECT:** `scan_moltbook()` übergibt `sender`
+  (Display-Name) statt `event.actor_id` (kanonische Identität) an
+  `bounty_claim()`. `claimed_by` ist damit ein instabiler Name, keine
+  autoritative Identität. Blockiert die End-to-End-Kette aus Issue #21.
+- `bounty_complete()` ist als Completion-Bypass deaktiviert (Risiko NONE),
+  aber `done bXXX`-Kommentare werden ohne Antwort dauerhaft als verarbeitet
+  markiert (Silent Command Sink — ACTIVE Protokollrisiko).
+- Worker und Orchestrator sind strukturell vom Review-Gate getrennt.
 - Die einzige autoritative Completion-Grenze ist `bounty_review(accept)`
   — aber sie hat keinen Produktionsaufrufer.
-- Deadline-Enforcement, automatische Execution-Triggering und
-  automatisches Review sind isoliert oder nicht implementiert.
-- Die Einzelteile des Lebenszyklus existieren, aber keine durchgängige
-  Verbindung vom externen Claim bis `done`.
+- Die Einzelteile existieren, aber keine durchgängige Verbindung vom
+  externen Claim bis `done`.
 
-**Empfehlung:** Kleinster Implementierungs-PR: `scan_submitted()` +
-`bounty_review`-Aufrufer + Deadline-Enforcement in `run_operator_execution()`.
+**Empfehlung:** Drei gestaffelte Implementierungs-Slices. Slice 1:
+Identity-korrekter Claim + manueller Review-Request via GitHub Issue
+(Option A) + Legacy-`done`-Fix. Slice 2: Deadline/Failure-Lifecycle.
+Slice 3: Deterministisches automatisches Review.

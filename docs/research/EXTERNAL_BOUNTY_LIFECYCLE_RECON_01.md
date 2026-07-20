@@ -35,11 +35,17 @@ no implementation of the full lifecycle.
 | Reads | `bounties.json`, `contracts.json` |
 | Writes | `bounties.json` (status="claimed"), `contracts.json` (create-or-load, activate) |
 | State transition | `"open"` → `"claimed"` |
-| Authority | none — any agent name can claim any open bounty. No actor_id check. |
+| Authority | **ACTIVE DESIGN DEFECT.** `scan_moltbook()` calls `bounty_claim(bid, sender)` using the display name (`sender`) instead of the canonical `event.actor_id` already resolved by the ingress pipeline. `claimed_by` is therefore a display name, not a stable actor identity. |
 | Idempotent | partially — second claim returns None (status no longer "open"). Contract path is idempotent (refuses reactivation). |
 | Error | Returns None for: not found, not open, or malformed `contract_terms` (atomic rejection before any write). Raises ValueError if record is not a dict. |
 
-**Notable:** The `agent` parameter is a plain string set directly as `claimed_by`. There is no cryptographic identity binding.
+**ACTIVE DESIGN DEFECT / IMPLEMENTATION BLOCKER:** `scan_moltbook()` has a fully resolved `CanonicalIngressEvent` with `event.actor_id` at the call site (`village/heartbeat.py:876`), but passes the raw display name `sender` to `bounty_claim()`. Consequences:
+
+1. Name change breaks claim ownership — if an agent changes their display name, `claimed_by` no longer matches.
+2. Two agents with the same display name collide — one can submit work for the other's claim.
+3. `run_operator_execution(actor_id=...)` and `bounty_submit(actor_id=...)` validate against `claimed_by`, which is the display name, breaking the end-to-end identity chain required by Issue #21.
+
+The fix: pass `event.actor_id` to `bounty_claim()` instead of `sender`. The display name remains available for response text and pokedex entries but MUST NOT be the authority-bearing identity.
 
 ### 1.4 `bounty_complete()` — `village/heartbeat.py:545`
 
@@ -127,7 +133,7 @@ no implementation of the full lifecycle.
 | Operation | Who can call it | Authority mechanism | AST-verified |
 |---|---|---|---|
 | `bounty_create()` | anyone (no production path) | none | — |
-| `bounty_claim()` | any Moltbook commenter, any script caller | none (plain string agent name) | — |
+| `bounty_claim()` | any Moltbook commenter, any script caller | **DEFECT:** uses display name (`sender`) instead of `event.actor_id`. Fix: pass `event.actor_id` from the already-resolved `CanonicalIngressEvent`. | — |
 | `bounty_submit()` | `run_operator_execution()` only | actor_id matches claimed_by; contract ACTIVE; WorkResult SUCCEEDED | yes |
 | `bounty_review()` | **no production caller** (reserved for human/separate automation) | decision validation; submission state check; criteria enforcement via `contract.fulfill()` | — |
 | `contract.fulfill()` | **only** `bounty_review(accept)` | all required criteria met | yes |
@@ -137,11 +143,25 @@ no implementation of the full lifecycle.
 
 ## 4. Bypass and legacy path inventory
 
-### 4.1 `bounty_complete()` — DELIBERATELY DISABLED
+### 4.1 `bounty_complete()` — DELIBERATELY DISABLED (SILENT COMMAND SINK)
 
-Previously allowed `claimed → done` without review. Now unconditionally refuses. The `"done bXXX"` Moltbook comment path still calls it but it is a silent no-op. Comment is marked processed and never retried.
+Previously allowed `claimed → done` without review. Now unconditionally refuses all transitions. The `"done bXXX"` Moltbook comment path still calls it (`scan_moltbook()` line 922) but receives `None` and marks the comment as processed (`proc.add(cid)`).
 
-**Bypass risk: NONE.** Verified by `test_bounty_contracts.py:62-101`.
+**Risk dimensions (separate classification):**
+
+| Risk | Level | Detail |
+|---|---|---|
+| Completion bypass | **NONE** | `bounty_complete()` unconditionally refuses — verified by `test_bounty_contracts.py:62-101`. |
+| State corruption | **NONE** | No files are written. Bounty and contract state are unchanged. |
+| Protocol/UX | **ACTIVE** | The external actor receives no explanation that `done` is no longer the valid completion path. The command is permanently consumed (`proc.add(cid)`) without any reply. The actor has no way to discover that Submission + Review are now required. |
+| Error class | **Silent command sink / false-consumption path** | The legacy command is accepted at the protocol level but discarded without feedback. |
+
+**Required fix in the implementation slice:** The `"done bXXX"` command must either:
+
+1. Be explicitly rejected with a reply explaining the Submission/Review path, or
+2. Be removed from the recognized command surface entirely.
+
+It must NOT remain a silent sink that permanently consumes the external actor's command without any response.
 
 ### 4.2 Worker → fulfill/complete — STRUCTURALLY BLOCKED
 
@@ -222,18 +242,55 @@ The review step is the critical gap. Two options:
 
 Both options preserve the invariant that the worker never completes a bounty.
 
-## 8. Recommended smallest implementation PR
+## 8. Recommended implementation slices
 
-**Title:** `village: external bounty lifecycle — wired end-to-end with review gate`
+### Implementation Slice 1 — Identity-correct claim + manual review request
+
+**Binding architectural decision: Option A — Human review via GitHub Issue.**
+
+No automatic Success-Criteria evaluation. No deterministic automated review.
 
 **Scope:**
-1. Add `scan_submitted()` to `village/heartbeat.py` — checks `bounty_submissions.json` for unreviewed submissions and creates a GitHub Issue for each (Option A) or runs deterministic review (Option B).
-2. Add `bounty_review` caller — either a `workflow_dispatch` step reading the Issue, or an automated function.
-3. Wire deadline enforcement into `run_operator_execution()` — reject execution if `contract.is_past_deadline()`.
-4. Tests for the full end-to-end path: external claim → ingress → identity → claim → execution → submission → review → done.
-5. Tests for all negative paths: wrong actor, non-SUCCEEDED, deadline exceeded, duplicate claim, duplicate review, corrupt persistence.
 
-**Not in scope:** automatic execution triggering, `violate()`/`expire()` activation, reputation, token economy.
+1. **Fix actor identity in claim path.** `scan_moltbook()` passes `event.actor_id` (not `sender`) to `bounty_claim()`. Display name remains metadata for response text and pokedex, but `claimed_by` stores the canonical identity.
+2. **Verify existing data and test paths** against the corrected identity semantics.
+3. **`publish_pending_review_requests()`** — new function in `village/heartbeat.py`. Contract:
+
+   - No evaluation. No completion. No state change to bounty or contract.
+   - Sole responsibility: detect unreviewed submissions and idempotently create a GitHub Issue for each.
+   - Stable dedup key from `submission_id`.
+   - Persisted mapping between submission and GitHub Issue number.
+   - Retry after API failure without creating duplicate issues.
+
+4. **Review caller.** A `workflow_dispatch` or explicit CLI entry point that reads the review-request Issue and calls `bounty_review(decision, reviewer_actor_id)` with the human's decision. This is the ONLY production caller of `bounty_review()`.
+5. **Fix legacy `done bXXX` path.** Replace the silent consumption with an explicit rejection reply directing the actor to use Submission + Review.
+6. **End-to-end test:** claim (with actor_id) → execution → submission → review request (GitHub Issue idempotent) → explicit review → done.
+7. **Negative tests:** wrong actor, duplicate claim, duplicate review request, unauthorized review, legacy `done` receives rejection reply (not silent consumption).
+
+**Explicitly NOT in Slice 1:**
+
+- Automatic review based on Success Criteria
+- Automatic execution after claim
+- Deadline enforcement
+- Contract expiry/violation activation
+- Production activation on Moltbook (gated behind `VILLAGE_BOUNTIES_ENABLED`)
+
+### Implementation Slice 2 — Deadline and failure lifecycle
+
+Separate, later slice:
+
+- Deadline enforcement in `run_operator_execution()`
+- `contract.expire()` ownership and triggering
+- `contract.fail()` for execution failures
+- Alignment of contract terminal state with bounty state
+
+### Implementation Slice 3 — Deterministic automated review
+
+Only after separate authority review:
+
+- Success-Criteria evaluator (no LLM in the decision path)
+- Automatic accept/reject based on objective criteria
+- Proof that no LLM holds decision authority
 
 ## 9. File inventory
 
