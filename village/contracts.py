@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re as _re
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -176,6 +177,89 @@ def compute_criterion_definition_hash(evaluator: EvaluatorType | None, params: d
     return hashlib.sha256(canonical_json_dumps(projection).encode()).hexdigest()
 
 
+_MAX_FIELD_LEN = 128
+_MAX_SEGMENTS = 4
+_MAX_SEGMENT_LEN = 32
+_MAX_VALUE_STRLEN = 256
+_MAX_MIN_COUNT = 1_000_000
+
+_FIELD_SEGMENT_RE = _re.compile(r"^[a-zA-Z0-9_]+$")
+
+
+def _validate_evaluator_config(evaluator: EvaluatorType, params: dict[str, Any]) -> None:
+    """Validate evaluator configuration against the Issue #34 schemas.
+
+    Raises ValueError for any violation. Used by both from_untrusted_terms
+    and persisted-state validation.
+    """
+    if evaluator == EvaluatorType.FIELD_PRESENT:
+        allowed = {"field"}
+        for k in params:
+            if k not in allowed:
+                raise ValueError(f"unknown parameter for FIELD_PRESENT: {k!r}")
+        field = params.get("field")
+        if not isinstance(field, str):
+            raise ValueError("FIELD_PRESENT: field must be a string")
+        _validate_field_path(field)
+
+    elif evaluator == EvaluatorType.FIELD_VALUE:
+        allowed = {"field", "value"}
+        for k in params:
+            if k not in allowed:
+                raise ValueError(f"unknown parameter for FIELD_VALUE: {k!r}")
+        field = params.get("field")
+        if not isinstance(field, str):
+            raise ValueError("FIELD_VALUE: field must be a string")
+        _validate_field_path(field)
+        value = params.get("value")
+        if value is None:
+            raise ValueError("FIELD_VALUE: value is required")
+        if isinstance(value, str):
+            if len(value) > _MAX_VALUE_STRLEN:
+                raise ValueError(f"FIELD_VALUE: string value too long ({len(value)} > {_MAX_VALUE_STRLEN})")
+        elif isinstance(value, bool):
+            pass  # strict bool
+        elif isinstance(value, (int, float)):
+            import math as _math
+
+            if isinstance(value, float) and (_math.isnan(value) or _math.isinf(value)):
+                raise ValueError("FIELD_VALUE: numeric value must be finite")
+        else:
+            raise ValueError(f"FIELD_VALUE: unsupported value type {type(value).__name__}")
+
+    elif evaluator == EvaluatorType.FIELD_COUNT:
+        allowed = {"field", "min_count"}
+        for k in params:
+            if k not in allowed:
+                raise ValueError(f"unknown parameter for FIELD_COUNT: {k!r}")
+        field = params.get("field")
+        if not isinstance(field, str):
+            raise ValueError("FIELD_COUNT: field must be a string")
+        _validate_field_path(field)
+        min_count = params.get("min_count")
+        if isinstance(min_count, bool) or not isinstance(min_count, int):
+            raise ValueError("FIELD_COUNT: min_count must be a strict integer")
+        if min_count < 0 or min_count > _MAX_MIN_COUNT:
+            raise ValueError(f"FIELD_COUNT: min_count out of range ({min_count})")
+
+    else:
+        raise ValueError(f"unknown evaluator type: {evaluator!r}")
+
+
+def _validate_field_path(field: str) -> None:
+    """Validate a dotted field path. Raises ValueError on violation."""
+    if not field or len(field) > _MAX_FIELD_LEN:
+        raise ValueError(f"field path too long ({len(field)})")
+    segments = field.split(".")
+    if len(segments) > _MAX_SEGMENTS:
+        raise ValueError(f"too many path segments ({len(segments)})")
+    for seg in segments:
+        if not seg or len(seg) > _MAX_SEGMENT_LEN:
+            raise ValueError("path segment too long")
+        if not _FIELD_SEGMENT_RE.match(seg):
+            raise ValueError(f"invalid path segment characters: {seg!r}")
+
+
 def compute_review_policy_hash(contract: "VillageContract") -> str:
     """Canonical hash of all decision-relevant review-policy fields.
 
@@ -233,24 +317,29 @@ class SuccessCriterion:
     def from_untrusted_terms(cls, d: dict[str, Any]) -> "SuccessCriterion":
         """Create from external contract_terms. Ignores any supplied
         criterion_id or criterion_definition_hash — the system owns identity.
-        Validates evaluator type and parameter schema."""
-        known: dict[str, Any] = {f: d[f] for f in ("name", "description", "required", "weight", "met") if f in d}
-        # Parse and validate evaluator
+        Always creates met=None — external data may not pre-set results.
+        Validates evaluator configuration via the shared validator."""
+        known: dict[str, Any] = {f: d[f] for f in ("name", "description", "required", "weight") if f in d}
+        # External data may NEVER pre-set evaluation results
+        known["met"] = None
+        # Parse and validate evaluator via shared validator
         evaluator_raw = d.get("evaluator")
-        if evaluator_raw is None:
-            known["evaluator"] = None
-            known["evaluator_params"] = {}
-        elif isinstance(evaluator_raw, str):
+        params = d.get("evaluator_params", {})
+        if not isinstance(params, dict):
+            raise ValueError("evaluator_params must be a dict")
+        if evaluator_raw is not None:
+            if not isinstance(evaluator_raw, str):
+                raise ValueError(f"evaluator must be a string or null, got {type(evaluator_raw).__name__}")
             try:
-                known["evaluator"] = EvaluatorType(evaluator_raw)
+                evaluator = EvaluatorType(evaluator_raw)
             except ValueError:
                 raise ValueError(f"unknown evaluator type: {evaluator_raw!r}")
-            params = d.get("evaluator_params")
-            if not isinstance(params, dict):
-                raise ValueError("evaluator_params must be a dict")
+            _validate_evaluator_config(evaluator, params)
+            known["evaluator"] = evaluator
             known["evaluator_params"] = params
         else:
-            raise ValueError(f"evaluator must be a string or null, got {type(evaluator_raw).__name__}")
+            known["evaluator"] = None
+            known["evaluator_params"] = {}
         # System-generated identity (never from external input)
         known["criterion_id"] = hashlib.sha256(f"{known.get('name', '')}:{uuid.uuid4()}".encode()).hexdigest()[:16]
         known["criterion_definition_hash"] = compute_criterion_definition_hash(
@@ -260,11 +349,29 @@ class SuccessCriterion:
 
     @classmethod
     def from_persisted_dict(cls, d: dict[str, Any]) -> "SuccessCriterion":
-        """Create from canonical persistence. Preserves stored criterion_id.
-        Validates evaluator, recomputes definition hash, fails closed on
-        mismatch. Legacy criteria without identity fields load safely but
-        remain ineligible for automatic review."""
+        """Create from canonical persistence. Preserves stored criterion_id
+        for new-schema criteria. Legacy criteria without identity fields
+        load with empty ID — deterministic, stable across repeated loads,
+        ineligible for automatic evaluation.
+
+        Partially bound criteria (ID without hash, hash without ID) fail
+        closed. Duplicate IDs within a contract must be caught by the
+        caller (VillageContract.from_dict).
+        """
         known: dict[str, Any] = {f: d[f] for f in cls.__dataclass_fields__ if f in d}
+        stored_id = known.get("criterion_id", "")
+        stored_hash = known.get("criterion_definition_hash", "")
+        has_id = bool(stored_id and isinstance(stored_id, str))
+        has_hash = bool(stored_hash and isinstance(stored_hash, str))
+
+        # Partially bound → fail closed
+        if has_id != has_hash:
+            raise ValueError(f"partially bound criterion identity: id={bool(has_id)} hash={bool(has_hash)}")
+        if has_id and (len(stored_id) < 8 or not all(c in "0123456789abcdef" for c in stored_id)):
+            raise ValueError(f"malformed criterion_id: {stored_id!r}")
+        if has_hash and len(stored_hash) != 64:
+            raise ValueError(f"malformed criterion_definition_hash length: {len(stored_hash)}")
+
         # Parse evaluator
         evaluator_raw = known.get("evaluator")
         if evaluator_raw is None or evaluator_raw == "":
@@ -274,28 +381,23 @@ class SuccessCriterion:
             try:
                 known["evaluator"] = EvaluatorType(evaluator_raw)
             except ValueError:
-                # Corrupt persisted evaluator → load as non-automatable
                 known["evaluator"] = None
                 known["evaluator_params"] = {}
         params = known.get("evaluator_params", {})
         if not isinstance(params, dict):
             params = {}
         known["evaluator_params"] = params
-        # Validate or generate identity
-        stored_id = known.get("criterion_id", "")
-        if not stored_id or not isinstance(stored_id, str):
-            # Legacy criterion without ID → assign one for future use
-            known["criterion_id"] = hashlib.sha256(
-                f"legacy:{known.get('name', '')}:{uuid.uuid4()}".encode()
-            ).hexdigest()[:16]
+
+        # Legacy: no ID → keep empty, never mint during read
+        if not has_id:
+            known["criterion_id"] = ""
+
         computed_hash = compute_criterion_definition_hash(known.get("evaluator"), params)
-        stored_hash = known.get("criterion_definition_hash", "")
-        if stored_hash and stored_hash != computed_hash:
+        if has_hash and stored_hash != computed_hash:
             raise ValueError(
-                f"criterion_definition_hash mismatch for {stored_id!r}: "
-                f"stored={stored_hash[:16]}... computed={computed_hash[:16]}..."
+                f"criterion_definition_hash mismatch: " f"stored={stored_hash[:16]}... computed={computed_hash[:16]}..."
             )
-        known["criterion_definition_hash"] = computed_hash
+        known["criterion_definition_hash"] = computed_hash if has_id else ""
         return cls(**known)
 
     # Backward-compatible alias used by legacy callers and tests
@@ -447,6 +549,15 @@ class VillageContract:
         else:
             raise ValueError(f"auto_review_enabled must be bool, got {type(auto_review_raw).__name__}")
 
+        criteria = [SuccessCriterion.from_persisted_dict(c) for c in d.get("success_criteria", [])]
+        # Enforce unique criterion IDs within the contract
+        seen_ids: set[str] = set()
+        for c in criteria:
+            if c.criterion_id:
+                if c.criterion_id in seen_ids:
+                    raise ValueError(f"duplicate criterion_id in contract: {c.criterion_id!r}")
+                seen_ids.add(c.criterion_id)
+
         return cls(
             contract_id=d["contract_id"],
             title=d.get("title", ""),
@@ -458,7 +569,7 @@ class VillageContract:
             allowed_resources=list(d.get("allowed_resources", [])),
             budget=Budget.from_dict(d["budget"]) if d.get("budget") else Budget(),
             deadline=deadline_dt,
-            success_criteria=[SuccessCriterion.from_persisted_dict(c) for c in d.get("success_criteria", [])],
+            success_criteria=criteria,
             auto_review_enabled=auto_review,
             state=ContractState(d.get("state", ContractState.DRAFTED.value)),
             termination_reason=d.get("termination_reason"),

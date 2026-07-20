@@ -2354,34 +2354,32 @@ Per Issue #27. Read-only Recon — keine Evaluator-Implementierung.
 
 ---
 
-## §39 — External Bounty Lifecycle 02B (2026-07-20, korrigiert)
+## §39 — External Bounty Lifecycle 02B (2026-07-20, zweite Korrektur)
 
 Per Issue #34. Foundation für deterministische Bounty-Auswertung.
 
-**Datenmodell (korrigiert nach Review):**
-- `SuccessCriterion.from_untrusted_terms()` — für externe contract_terms.
-  Ignoriert gelieferte IDs, validiert Evaluator-Type und Parameter-Schema.
-- `SuccessCriterion.from_persisted_dict()` — für kanonische Persistenz.
-  Bewahrt criterion_id, prüft definition_hash, fail-closed bei Mismatch.
-  Legacy-Kriterien ohne ID erhalten eine neue.
-- `criterion_id` überlebt kanonischen Save/Load unverändert.
-- `VillageContract.auto_review_enabled` in to_dict/from_dict/known_fields.
-  Fehlendes Legacy-Feld → False, malformed → ValueError.
-- `canonical_json_dumps()` mit `allow_nan=False` (strikte Serialisierung,
-  keine String-Scans).
+**Datenmodell (zweite Korrektur nach Review):**
+- Getrennte Factory-Methoden: `from_untrusted_terms()` (extern, ignoriert IDs,
+  setzt immer `met=None`), `from_persisted_dict()` (kanonisch, bewahrt IDs).
+- Legacy-Kriterien ohne ID: `criterion_id=""`, `criterion_definition_hash=""`.
+  Stabil über wiederholte Loads, nie UUID-Generierung während Read.
+- Partially-bound Identity (ID ohne Hash oder umgekehrt) → ValueError.
+- `_validate_evaluator_config()` als shared Validator für beide Pfade.
+- Unique criterion IDs innerhalb eines Contracts (Duplicate → ValueError).
+- `auto_review_enabled` in to_dict/from_dict/known_fields; fehlend→False;
+  malformed→ValueError; extern nicht setzbar.
 
 **Submission-Bindings:**
 - 10 Felder: submission_id, bounty_id, contract_id, contract_version,
   work_result_id, execution_id, output_canonical_hash, review_policy_hash,
   criterion_ids, criterion_definition_hashes.
+- `validate_submission_bindings()`: pure, non-mutating, typed reason codes.
 
-**Evaluator (village/evaluator.py):**
-- Prüft `isinstance(output, dict)` und `isinstance(params, dict)` vor
-  jedem Zugriff (fail-closed, nie Raise).
-- Unknown/Corrupt-Evaluator in Persistenz → non-automatable.
+**Evaluator:** `isinstance(output, dict)` + `isinstance(params, dict)` Guards.
+Unknown/Corrupt in Persistenz → non-automatable.
 
 **Nicht implementiert:** automatisches Review, FinalEvaluation,
-Finalization-Journal, Contract-Fulfillment, Bounty-Completion.
+Finalization-Journal, Bounty-Completion.
 
-**Tests:** 28 neue (identity, hash-mismatch, persisted-id, auto_review_enabled).
-Vollständige Suite: 379/379. Ruff/mypy/py_compile grün.
+**Tests:** 46 neue (identity, legacy, bindings, auto_review, canonical-json,
+policy-hash). Vollständige Suite: 397/397. Ruff/mypy/py_compile grün.
