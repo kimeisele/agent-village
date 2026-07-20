@@ -1086,24 +1086,40 @@ def _make_review_marker(submission_id: str) -> str:
 
 
 def _find_existing_review_issue(submission_id: str) -> dict[str, Any] | None:
-    """Search open issues for one carrying our review-request marker.
+    """Search for an existing review-request Issue by its marker.
 
-    Returns the issue dict (with ``number``, ``html_url``) if found,
-    or ``None``.  Does not trust issue title alone for deduplication.
+    Searches GitHub for issues containing the exact HTML marker, then
+    fetches each candidate's body to verify the marker is genuinely
+    present (not just a search-index coincidence).  Returns the issue
+    dict (with ``number``, ``html_url``) only when the exact marker is
+    confirmed in the body, or ``None``.
     """
-    marker = _make_review_marker(submission_id)
-    # Search open issues first; if not found, check closed.
+    expected_marker = _make_review_marker(submission_id)
     for state in ("open", "closed"):
-        results = _gh(f"search/issues?q={_quote(marker)}+state:{state}")
-        if isinstance(results, dict):
-            items = results.get("items", [])
-            if isinstance(items, list) and items:
-                first = items[0]
-                if isinstance(first, dict):
-                    return {
-                        "issue_number": first.get("number"),
-                        "issue_url": first.get("html_url", ""),
-                    }
+        results = _gh(f"search/issues?q={_quote(expected_marker)}+state:{state}")
+        if not isinstance(results, dict):
+            continue
+        items = results.get("items", [])
+        if not isinstance(items, list):
+            continue
+        for candidate in items:
+            if not isinstance(candidate, dict):
+                continue
+            issue_number = candidate.get("number")
+            if not issue_number:
+                continue
+            # Fetch the full issue to inspect the body
+            full = _gh(f"issues/{issue_number}")
+            if not isinstance(full, dict):
+                continue
+            body = full.get("body", "")
+            if not isinstance(body, str):
+                continue
+            if expected_marker in body:
+                return {
+                    "issue_number": issue_number,
+                    "issue_url": full.get("html_url", ""),
+                }
     return None
 
 
@@ -1119,6 +1135,28 @@ def _quote(text: str) -> str:
     )
 
 
+def _validate_review_mapping(mapping: dict[str, Any], sid: str) -> None:
+    """Fail closed on malformed mapping entries.
+
+    Raises ``ValueError`` if the entry for *sid* exists but is not a
+    dict, is missing ``issue_number``, has a non-positive
+    ``issue_number``, or lacks an ``issue_url`` string.
+    """
+    entry = mapping.get(sid)
+    if entry is None:
+        return
+    if not isinstance(entry, dict):
+        raise ValueError(f"review_requests entry for {sid!r} is not a dict: {type(entry).__name__}")
+    issue_number = entry.get("issue_number")
+    if not isinstance(issue_number, int) or issue_number <= 0:
+        raise ValueError(f"review_requests entry for {sid!r} has invalid issue_number: {issue_number!r}")
+    if not isinstance(entry.get("issue_url"), str):
+        raise ValueError(f"review_requests entry for {sid!r} has missing or non-string issue_url")
+    stored_sid = entry.get("submission_id")
+    if stored_sid is not None and stored_sid != sid:
+        raise ValueError(f"review_requests entry for {sid!r} has mismatched stored submission_id: {stored_sid!r}")
+
+
 def publish_pending_review_requests() -> int:
     """Detect unreviewed submissions and create GitHub Issues for each.
 
@@ -1129,10 +1167,9 @@ def publish_pending_review_requests() -> int:
     reconciliation.
 
     The mapping is persisted **immediately** after each successful POST
-    so a process crash between Issue creation and ``_save`` cannot
-    produce duplicates.  Before creating a new Issue, the function
-    reconciles against GitHub using the marker — if an existing Issue
-    is found, the local mapping is reconstructed instead.
+    or reconciliation.  Before creating or trusting an Issue the
+    function fetches the candidate body to verify the exact marker.
+    Malformed local mappings raise ``ValueError`` (fail closed).
 
     Does NOT evaluate evidence, complete bounties, call bounty_review(),
     or mutate Bounty/Contract state.
@@ -1148,25 +1185,29 @@ def publish_pending_review_requests() -> int:
     if not isinstance(mapping, dict):
         mapping = {}
 
+    # Fail closed on malformed existing entries
+    for sid in list(mapping.keys()):
+        _validate_review_mapping(mapping, sid)
+
     # Reconcile: check every unmapped unreviewed submission against GitHub
     for sid, sub in submissions.items():
         if not isinstance(sub, dict):
             continue
         if sub.get("review") is not None:
             continue
-        if sid in mapping and isinstance(mapping.get(sid), dict):
+        if sid in mapping:
             continue
 
-        # Try server-side reconciliation before POST
         existing = _find_existing_review_issue(sid)
         if existing is not None:
             mapping[sid] = {
                 "issue_number": existing["issue_number"],
                 "issue_url": existing["issue_url"],
+                "submission_id": sid,
                 "created_at": time.time(),
             }
+            _save(REVIEW_REQUESTS, mapping)
             print(f"  [review] reconciled issue #{existing['issue_number']} for submission {sid}")
-            continue
 
     created = 0
     for sid, sub in submissions.items():
@@ -1174,7 +1215,7 @@ def publish_pending_review_requests() -> int:
             continue
         if sub.get("review") is not None:
             continue
-        if sid in mapping and isinstance(mapping.get(sid), dict):
+        if sid in mapping:
             continue
 
         marker = _make_review_marker(sid)
@@ -1217,20 +1258,15 @@ def publish_pending_review_requests() -> int:
         if not issue_number:
             continue
 
-        # Persist IMMEDIATELY after each successful POST — crash-safe
         mapping[sid] = {
             "issue_number": issue_number,
             "issue_url": issue_raw.get("html_url", ""),
+            "submission_id": sid,
             "created_at": time.time(),
         }
         _save(REVIEW_REQUESTS, mapping)
         created += 1
         print(f"  [review] created issue #{issue_number} for submission {sid}")
-
-    # _save was already called per-issue; final save is a no-op unless
-    # reconciliation added entries without a create (already handled above)
-    if created:
-        _save(REVIEW_REQUESTS, mapping)
 
     return created
 

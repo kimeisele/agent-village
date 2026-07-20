@@ -2306,7 +2306,16 @@ C. Manueller Review-Entry: `scripts/bounty_review_cli.py` — validiert
 
 D. Legacy `done bXXX`: Erhält jetzt explizite Ablehnungsantwort mit
    Verweis auf Submission/Review-Pfad. Nicht mehr still konsumiert.
-   Retry-kompatibel via `pending["bounty_reject"]`.
+   Retry-kompatibel via `pending["bounty_done_reject"]`.
+
+**Review-Request-Publikation:**
+- HTML-Marker `<!-- agent-village-review-request:submission_id=... -->`
+  im Issue-Body für server-seitige Dedup-Rekonstruktion.
+- Exakte Marker-Verifikation durch Body-Fetch vor jeder Akzeptanz.
+- Mapping-Persistenz unmittelbar nach jeder erfolgreichen POST oder
+  Reconciliation (crash-safe).
+- Fehlerhafte lokale Mappings werden mit `ValueError` abgelehnt
+  (fail-closed).
 
 **Nicht aktiviert:** Keine produktive Moltbook-Aktivierung
 (`VILLAGE_BOUNTIES_ENABLED` bleibt gegatet). Kein automatisches Review.

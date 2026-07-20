@@ -235,6 +235,111 @@ class TestPublishPendingReviewRequests:
         fourth = hb.publish_pending_review_requests()
         assert fourth == 0
 
+    def test_reconciliation_persists_immediately(self, isolated_village, open_bounty, monkeypatch):
+        """Recovered mapping is saved immediately, no repeated reconciliation."""
+        self._create_submitted_bounty(isolated_village, open_bounty)
+        sid = f"submission:{open_bounty['id']}:exec-1"
+        submitted = br._get_submission(sid)
+        assert submitted is not None
+
+        search_calls = []
+        fetch_calls = []
+
+        def fake_gh(path, method="GET", body=None):
+            if "search" in path:
+                search_calls.append(1)
+                return {"items": [{"number": 42}]}
+            if "issues/42" in path:
+                fetch_calls.append(1)
+                marker = hb._make_review_marker(sid)
+                return {"number": 42, "body": marker, "html_url": "https://github.com/issue/42"}
+            return {}
+
+        monkeypatch.setattr(hb, "_gh", fake_gh)
+
+        # First run: reconcile
+        first = hb.publish_pending_review_requests()
+        assert first == 0  # reconciled, not created
+        assert len(search_calls) >= 1
+        assert len(fetch_calls) >= 1
+
+        # Verify mapping was saved
+        mapping = hb._load(hb.REVIEW_REQUESTS)
+        assert sid in mapping
+        assert mapping[sid]["issue_number"] == 42
+
+        # Second run: already mapped, no work
+        second = hb.publish_pending_review_requests()
+        assert second == 0
+
+    def test_exact_marker_accepted(self, isolated_village, open_bounty, monkeypatch):
+        """Exact marker in body is accepted."""
+        self._create_submitted_bounty(isolated_village, open_bounty)
+        sid = f"submission:{open_bounty['id']}:exec-1"
+        marker = hb._make_review_marker(sid)
+
+        def fake_gh(path, method="GET", body=None):
+            if "search" in path:
+                return {"items": [{"number": 1}]}
+            if "issues/1" in path:
+                return {"number": 1, "body": marker, "html_url": "https://github.com/issue/1"}
+            return {}
+
+        monkeypatch.setattr(hb, "_gh", fake_gh)
+        result = hb.publish_pending_review_requests()
+        assert result == 0  # reconciled
+
+    def test_marker_for_other_submission_rejected(self, isolated_village, open_bounty, monkeypatch):
+        """Marker for a different submission is not accepted."""
+        self._create_submitted_bounty(isolated_village, open_bounty)
+        wrong_marker = hb._make_review_marker("submission:other:1")
+
+        def fake_gh(path, method="GET", body=None):
+            if "search" in path:
+                return {"items": [{"number": 1}]}
+            if "issues/1" in path:
+                return {"number": 1, "body": wrong_marker, "html_url": "https://github.com/issue/1"}
+            if method == "POST":
+                return {"number": 2, "html_url": "https://github.com/issue/2"}
+            return {}
+
+        monkeypatch.setattr(hb, "_gh", fake_gh)
+        # Search found an issue but its body has the WRONG marker —
+        # reconciliation must not accept it, so we POST instead
+        result = hb.publish_pending_review_requests()
+        assert result == 1  # created new, not reconciled
+
+    def test_malformed_non_dict_entry_fails_closed(self, isolated_village, open_bounty):
+        self._create_submitted_bounty(isolated_village, open_bounty)
+        sid = f"submission:{open_bounty['id']}:exec-1"
+        hb._save(hb.REVIEW_REQUESTS, {sid: "not_a_dict"})
+        with pytest.raises(ValueError, match="not a dict"):
+            hb.publish_pending_review_requests()
+
+    def test_malformed_missing_issue_number_fails_closed(self, isolated_village, open_bounty):
+        self._create_submitted_bounty(isolated_village, open_bounty)
+        sid = f"submission:{open_bounty['id']}:exec-1"
+        hb._save(hb.REVIEW_REQUESTS, {sid: {"issue_url": "https://github.com/issue/1"}})
+        with pytest.raises(ValueError, match="invalid issue_number"):
+            hb.publish_pending_review_requests()
+
+    def test_malformed_invalid_issue_number_fails_closed(self, isolated_village, open_bounty):
+        self._create_submitted_bounty(isolated_village, open_bounty)
+        sid = f"submission:{open_bounty['id']}:exec-1"
+        hb._save(hb.REVIEW_REQUESTS, {sid: {"issue_number": -1, "issue_url": "https://github.com/issue/1"}})
+        with pytest.raises(ValueError, match="invalid issue_number"):
+            hb.publish_pending_review_requests()
+
+    def test_malformed_mismatched_submission_id_fails_closed(self, isolated_village, open_bounty):
+        self._create_submitted_bounty(isolated_village, open_bounty)
+        sid = f"submission:{open_bounty['id']}:exec-1"
+        hb._save(
+            hb.REVIEW_REQUESTS,
+            {sid: {"issue_number": 1, "issue_url": "https://github.com/issue/1", "submission_id": "wrong"}},
+        )
+        with pytest.raises(ValueError, match="mismatched stored submission_id"):
+            hb.publish_pending_review_requests()
+
 
 # ── Manual review CLI ─────────────────────────────────────────
 
