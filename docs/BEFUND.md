@@ -2321,5 +2321,5 @@ D. Legacy `done bXXX`: Erhält jetzt explizite Ablehnungsantwort mit
 (`VILLAGE_BOUNTIES_ENABLED` bleibt gegatet). Kein automatisches Review.
 Kein Deadline-Enforcement.
 
-**Tests:** 17 neue Tests in `test_external_bounty_lifecycle_01a.py`.
-Vollständige Suite: 344/344. Ruff/mypy grün.
+**Tests:** 24 neue Tests in `test_external_bounty_lifecycle_01a.py`.
+Vollständige Suite: 351/351. Ruff/mypy/py_compile grün.
