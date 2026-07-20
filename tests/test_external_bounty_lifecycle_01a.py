@@ -207,27 +207,31 @@ class TestPublishPendingReviewRequests:
     def test_api_failure_retry_safe(self, isolated_village, open_bounty, monkeypatch):
         bid, sub = self._create_submitted_bounty(isolated_village, open_bounty)
 
-        call_count = [0]
+        post_call_count = [0]
 
         def fake_gh(path, method="GET", body=None):
-            call_count[0] += 1
-            if call_count[0] <= 2:
+            if method == "GET":
+                # Search call — return empty results (no existing issue)
+                return {"items": []}
+            # POST call — simulate failures then success
+            post_call_count[0] += 1
+            if post_call_count[0] <= 2:
                 return None  # fail twice
             return {"number": 1, "html_url": "https://github.com/issue/1"}
 
         monkeypatch.setattr(hb, "_gh", fake_gh)
 
-        # First attempt fails
+        # First attempt: search ok, POST fails
         first = hb.publish_pending_review_requests()
         assert first == 0
-        # Second attempt fails
+        # Second attempt: search ok, POST fails again
         second = hb.publish_pending_review_requests()
         assert second == 0
-        # Third attempt succeeds
+        # Third attempt: search ok, POST succeeds
         third = hb.publish_pending_review_requests()
         assert third == 1
 
-        # Fourth should be dedup
+        # Fourth should be dedup via mapping
         fourth = hb.publish_pending_review_requests()
         assert fourth == 0
 

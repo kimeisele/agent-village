@@ -62,6 +62,12 @@ def main() -> int:
     if bounty.get("status") != "submitted":
         print(f"Error: bounty {bounty_id!r} is not in 'submitted' state (current: {bounty.get('status')!r})")
         return 1
+    if bounty.get("current_submission_id") != submission_id:
+        print(
+            f"Error: submission {submission_id!r} is not the current authoritative submission "
+            f"for bounty {bounty_id!r} (current: {bounty.get('current_submission_id')!r})"
+        )
+        return 1
 
     # Call the sole authorized completion boundary
     result = br.bounty_review(bounty_id, reviewer_actor_id, decision)
