@@ -2326,35 +2326,34 @@ Vollständige Suite: 351/351. Ruff/mypy/py_compile grün.
 
 ---
 
-## §38 — Deterministic Bounty Review Recon 01 (2026-07-20, zweite Korrektur)
+## §38 — Deterministic Bounty Review Recon 01 (2026-07-20, dritte Korrektur)
 
 Per Issue #27. Read-only Recon — keine Evaluator-Implementierung.
 
-**Spezifikation (zweite Korrektur nach Review):**
-- Exakte Evaluator-to-Review-API: `FinalEvaluation` (immutable frozen
-  dataclass) als einziges Artefakt zwischen Evaluator und Review Authority.
-  `finalize_review()` lädt Submission/Bounty/Contract frisch, validiert
-  alle Bindings, wendet Criterion-Outcomes selbst an.
-- Kein caller-mutiertes Contract-Objekt, kein unabhängiges Pre-Review-
-  Persistieren von `criterion.met`.
-- Idempotentes Finalization-Protokoll: `FinalizationIntent`-Journal
-  (append-only) vor Multi-File-Mutation. Crash-Recovery-Matrix für 6
-  Abbruch-Zeitpunkte mit Replay-Mechanismus.
-- `reconcile_review_issue_effects()` als separate Funktion für GitHub
-  Downstream-Delivery. Stabile Marker pro Evaluation-Attempt und
-  Final-Verdict. Delivery-State-Persistenz. GitHub bleibt
-  nicht-authoritativ.
-- `criterion_id` als opaque stabile ID (einmal vergeben, nie aus
-  mutablen Feldern neu berechnet). Separater `criterion_definition_hash`
-  für Änderungserkennung.
-- Exakter kanonischer Review-Policy-Hash: `auto_review_enabled`,
-  criterion IDs, required flags, evaluator types, evaluator params,
-  policy_schema_version. Explizit ausgeschlossen: `met`, `name`,
-  `description`, `weight`.
-- Vollständige Evaluator-Parameter-Bounds: max path length/depth/segment,
-  dict-only traversal, max string value, finite-number requirement,
-  strict type equality (bool ≠ int), max min_count, _SENTINEL vs None.
-- Korrigierte Mutation-Path-Inventur: `bounty_review()` ruft
-  `contract.fulfill()` direkt auf (accept path, line 343).
-- BEFUND §38 dokumentiert Handoff/Crash-Recovery/GitHub-Reconciliation
-  als spezifiziert aber noch nicht implementiert.
+**Spezifikation (dritte Korrektur nach Review):**
+- Eine kanonische Final-Review-Funktion: `apply_review_decision(evaluation:
+  FinalEvaluation) -> bool`. Lädt Submission/Bounty/Contract frisch,
+  validiert alle Bindings, wendet Criterion-Outcomes an, schreibt
+  Finalization-Record, erfüllt Contract (accept) oder lässt ihn ACTIVE
+  (reject), aktualisiert Bounty. Ruft NICHT die bestehende
+  `bounty_review()` unverändert auf — diese bleibt für den manuellen
+  CLI-Pfad.
+- Ein kohärentes Finalization-Record-Modell: ein mutabler Record pro
+  Submission, Key `finalize:<submission_id>`, Stages: prepared →
+  review_attached → contract_applied → bounty_applied → complete
+  (oder failed_closed). `evaluation_hash` und `decision` werden einmal
+  gesetzt und nie geändert.
+- Crash-Recovery an die exakte Write-Order von `apply_review_decision()`
+  gebunden. Matching Review = resumable success. Conflicting Review =
+  fail closed.
+- Vollständiges `FinalEvaluation`: `work_result_id`, `execution_id`,
+  `ReviewDecision`-Enum, Results für ALLE Kriterien (required + optional),
+  `evaluation_hash` als Self-Hash über alle Felder.
+- `criterion_id`: system-generiert, opaque, einmal persistiert, unique
+  pro Contract. Nie aus externen `contract_terms` als autoritativ
+  akzeptiert. `criterion_definition_hash`: system-berechnet, bei
+  Deserialisierung verifiziert.
+- Policy-Authority-Invariant: `auto_review_enabled` und Evaluator-
+  Konfiguration ausschließlich durch Owner-authorisierten kanonischen
+  Repository-State. Externe Ingress-Daten dürfen Policy nicht erstellen,
+  ändern oder aktivieren. Nicht autorisierte Policy → INDETERMINATE.

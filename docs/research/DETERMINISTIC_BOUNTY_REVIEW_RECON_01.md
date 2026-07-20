@@ -1,62 +1,39 @@
 # Deterministic Bounty Review Recon 01 — evaluator architecture and typed criteria
 
 Status: Phase 1 recon per Issue #27. Read-only specification — no evaluator
-implementation, no automatic `bounty_review()` caller.
+implementation, no automatic review activation.
 
-## 1. Current contract between criteria, evidence, and review
+## 1. Current state
 
-### 1.1 `VillageContract.success_criteria` (village/contracts.py:181-201)
+### 1.1 `SuccessCriterion` (village/contracts.py:150-177)
 
-| Field | Type | Meaning |
+`met` is `bool | None`, default `None`. NEVER set by production code —
+only test code assigns to it. `contract.fulfill()` raises `ValueError`
+for any required criterion where `met is not True`.
+
+### 1.2 `bounty_review()` accept path (village/bounty_review.py:339-348)
+
+Directly calls `contract.fulfill()` at line 343. This is a direct
+production call, not indirect.
+
+### 1.3 Mutation path inventory
+
+| Location | Sets `.met`? | Calls `contract.fulfill`? |
 |---|---|---|
-| `name` | `str` | Human-readable label |
-| `description` | `str` (default `""`) | Free-text explanation — NOT an executable predicate |
-| `required` | `bool` (default `False`) | If `True`, MUST pass for `fulfill()` to succeed |
-| `weight` | `float` (default `1.0`) | Must be in `[0, 1]`. Currently unused. |
-| `met` | `bool \| None` (default `None`) | `None` = not yet evaluated; `True` = passed; `False` = failed |
+| `bounty_review.py:343` (accept path) | NO | YES — direct call |
+| `bounty_review.py` (reject path) | NO | NO |
+| Every other production module | NO | NO (AST-verified for worker/orchestrator) |
 
-**Current state:** `met` is NEVER set by any production code path.
+### 1.4 The gap
 
-### 1.2 `contract.fulfill()` (village/contracts.py:256-261)
+The evaluator is the most visible missing piece, but the authoritative
+application of evaluation results, immutable submission binding, a
+crash-safe finalization protocol, and non-authoritative downstream
+delivery are equally absent.
 
-Checks `c.required and c.met is not True`, raises `ValueError` on unmet required criteria.
+## 2. Evaluator (pure, side-effect-free)
 
-### 1.3 Submission and review data flow
-
-```
-WorkResult → bounty_submit() → bounty_submissions.json
-    → publish_pending_review_requests() → GitHub Issue
-    → [GAP: no evaluator, no review authority, no finalization protocol]
-    → bounty_review() → contract.fulfill() → bounty done
-```
-
-## 2. Complete mutation path inventory (Issue #27 requirement)
-
-### 2.1 Every caller and mutation path
-
-| Location | Sets `.met`? | Calls `_attach_review`? | Calls `bounty_review`? | Calls `contract.fulfill`? |
-|---|---|---|---|---|
-| `village/bounty_review.py:343` | NO | YES (333, 347) | YES (266, definition) | **YES — direct call** in accept path |
-| `village/worker.py` | NO | NO | NO | NO (AST-verified) |
-| `village/execution_orchestrator.py` | NO | NO | NO | NO (AST-verified) |
-| `village/heartbeat.py` | NO | NO | NO | NO |
-| `scripts/bounty_review_cli.py` | NO | NO | YES (sole production caller) | NO |
-| `scripts/operator_execute.py` | NO | NO | NO | NO |
-
-### 2.2 Other contract terminal-state transitions
-
-| Function | Production calls |
-|---|---|
-| `contract.violate()`, `contract.expire()`, `contract.terminate()`, `contract.fail()` | **NONE** — defined but unreachable |
-| `contract.fulfill()` | **Directly called by `bounty_review()` accept path** (`bounty_review.py:343`) |
-
-### 2.3 Test-only `.met` assignments
-
-`tests/test_contracts.py:162-164,185,265`; `tests/test_bounty_review.py:365`.
-
-## 3. Typed success-criterion protocol
-
-### 3.1 Evaluator result type
+### 2.1 Result type
 
 ```python
 class EvalResult(str, Enum):
@@ -65,42 +42,33 @@ class EvalResult(str, Enum):
     INDETERMINATE = "INDETERMINATE"
 ```
 
-### 3.2 Evaluator types and exact parameter bounds
+### 2.2 Evaluator types and exact parameter bounds
 
 #### FIELD_PRESENT
 
 ```python
-# Parameter schema (validated before use):
-#   field: str (required, max 128 chars, max 4 segments, each segment
-#          max 32 chars, only [a-zA-Z0-9_], dict-only traversal,
-#          no array indexing, no wildcards)
+# field: str (required, max 128 chars, max 4 dot-separated segments,
+#   each segment max 32 chars, [a-zA-Z0-9_], dict-only traversal)
 # Unknown keys → INDETERMINATE. Missing required key → INDETERMINATE.
-# Wrong type for a known key → INDETERMINATE.
 
-# Semantics: checks key existence AND value is not None.
-#   output.get("field", _SENTINEL) is not _SENTINEL
-#     and output.get("field") is not None → PASS
+# _SENTINEL distinct from None:
+#   key absent (_SENTINEL) → INDETERMINATE
+#   key present, value is not None → PASS
 #   key present, value is None → FAIL
-#   key absent → INDETERMINATE (cannot distinguish "intentionally absent"
-#     from "worker failed to produce the field")
 ```
-
-_SENTINEL is a unique module-level object, distinct from `None`.
 
 #### FIELD_VALUE
 
 ```python
-# Parameter schema:
-#   field: str (required, same path rules as FIELD_PRESENT)
-#   value: str | int | float | bool (required)
-#     - str: max 256 chars
-#     - int | float: must be finite (no NaN, no Inf, no -Inf)
-#     - bool: strict — True/False only, not 0/1
+# field: str (required, same path rules)
+# value: str|int|float|bool (required)
+#   - str: max 256 chars
+#   - int|float: must be finite
+#   - bool: strict (True/False only, never 0/1)
 # Unknown keys → INDETERMINATE.
 
-# Semantics:
-#   output.get("field", _SENTINEL) is _SENTINEL → INDETERMINATE
-#   type(output_val) is not type(value) → INDETERMINATE (strict type equality)
+#   key absent → INDETERMINATE
+#   type(output_val) is not type(value) → INDETERMINATE
 #   output_val == value → PASS
 #   output_val != value → FAIL
 ```
@@ -108,127 +76,105 @@ _SENTINEL is a unique module-level object, distinct from `None`.
 #### FIELD_COUNT
 
 ```python
-# Parameter schema:
-#   field: str (required, same path rules)
-#   min_count: int (required, 0 <= min_count <= 1_000_000)
+# field: str (required, same path rules)
+# min_count: int (required, 0 <= min_count <= 1_000_000)
 # Unknown keys → INDETERMINATE.
 
-# Semantics:
-#   output.get("field", _SENTINEL) is _SENTINEL → INDETERMINATE
-#   not isinstance(val, list) → INDETERMINATE
+#   key absent or val not a list → INDETERMINATE
 #   len(val) >= min_count → PASS
 #   len(val) < min_count → FAIL
 ```
 
-#### Reason-code format
+#### Reason codes
 
-```python
-# "<evaluator_type>:<field>:<code>"
-# codes: pass, fail_absent, fail_value, fail_count,
-#   indeterminate_missing, indeterminate_type, indeterminate_params,
-#   indeterminate_unknown_eval, indeterminate_human_only
-#
-# Every reason code is bounded (max 128 chars), constructed from
-# validated evaluator type and field name, never from raw output data.
-```
+`"<evaluator_type>:<field>:<code>"` — bounded (max 128 chars), constructed
+from validated type/field names, never from raw output data.
 
-### 3.3 Extended SuccessCriterion
-
-```python
-@dataclass
-class SuccessCriterion:
-    criterion_id: str              # opaque stable ID, assigned once at creation
-    criterion_definition_hash: str # sha256(canonical_json_dumps(def))
-                                   # recomputed on definition change only
-    name: str
-    description: str = ""
-    required: bool = False
-    weight: float = 1.0
-    met: bool | None = None        # set ONLY by the final review function
-
-    evaluator: EvaluatorType | None = None
-    evaluator_params: dict[str, Any] = field(default_factory=dict)
-```
-
-**`criterion_id`:** assigned once when the criterion is first created
-(e.g., `sha256(name + evaluator + params)` at creation, stored opaquely).
-Never recomputed from mutable `name` or `evaluator` fields. Display-name
-changes do not change the ID.
-
-**`criterion_definition_hash`:** recomputed whenever the evaluator type
-or its parameters change. Used in the review-policy hash to detect
-definition changes between submission and review.
-
-### 3.4 Evaluator function contract
+### 2.3 Evaluator contract
 
 ```python
 def evaluate_criterion(
     criterion: SuccessCriterion,
     output: dict[str, Any],
 ) -> EvalResult:
-    """Pure, side-effect-free. Returns PASS/FAIL/INDETERMINATE.
-    Never raises. Never mutates state. Never imports review/contract modules."""
+    """Pure. Never raises (returns INDETERMINATE). Never mutates state.
+    Never imports review/contract/heartbeat modules."""
 ```
 
-## 4. Exact evaluator-to-review API
+## 3. Criterion identity and definition
 
-### 4.1 Immutable final-evaluation artifact
+### 3.1 `criterion_id`
+
+- System-generated at creation time.
+- Opaque, persisted once, unique within the contract.
+- Never recomputed from mutable fields (name, evaluator, params).
+- Never accepted as authoritative merely because external `contract_terms`
+  supplied it — the system assigns the ID.
+- Identical criterion definitions receive distinct IDs.
+
+### 3.2 `criterion_definition_hash`
+
+- System-computed: `sha256(canonical_json_dumps({evaluator, evaluator_params}))`.
+- Verified during deserialization and policy validation.
+- Never trusted from stored external data without recomputation.
+
+### 3.3 Extended `SuccessCriterion`
 
 ```python
+@dataclass
+class SuccessCriterion:
+    criterion_id: str              # system-assigned, opaque, stable
+    criterion_definition_hash: str # system-computed, verified on load
+    name: str                      # display label (mutable, non-authoritative)
+    description: str = ""
+    required: bool = False
+    weight: float = 1.0
+    met: bool | None = None        # set ONLY by apply_review_decision()
+
+    evaluator: EvaluatorType | None = None
+    evaluator_params: dict[str, Any] = field(default_factory=dict)
+```
+
+## 4. Immutable FinalEvaluation artifact
+
+```python
+from enum import Enum
+
+class ReviewDecision(str, Enum):
+    ACCEPT = "accept"
+    REJECT = "reject"
+    INDETERMINATE = "indeterminate"
+
 @dataclass(frozen=True)
 class FinalEvaluation:
-    """Immutable artifact produced by the evaluator, consumed by the review
-    authority. Carries everything needed to apply criterion outcomes without
-    trusting a caller-mutated contract object."""
+    """Immutable artifact: evaluator → review authority. Hash covers all fields."""
     submission_id: str
     bounty_id: str
     contract_id: str
     contract_version: str
-    output_canonical_hash: str       # from submission binding (not recomputed)
-    review_policy_hash: str          # canonical projection (see §5)
-    criterion_ids: tuple[str, ...]   # from submission binding
-    criterion_definition_hashes: tuple[str, ...]  # one per criterion
-    criteria_results: tuple[tuple[str, EvalResult], ...]  # (criterion_id, result)
-    overall_decision: str            # "accept" | "reject" | "indeterminate"
+    work_result_id: str
+    execution_id: str
+    output_canonical_hash: str
+    review_policy_hash: str
+    criterion_ids: tuple[str, ...]
+    criterion_definition_hashes: tuple[str, ...]
+    criteria_results: tuple[tuple[str, EvalResult], ...]
+      # (criterion_id, result) for ALL criteria (required + optional)
+    overall_decision: ReviewDecision
     reason_codes: tuple[str, ...]
-    evaluator_version: str           # git SHA
+    evaluator_version: str
     evaluated_at: float
+    evaluation_hash: str  # sha256 of all above fields (canonical serialization)
+
+    def compute_hash(self) -> str:
+        """sha256(canonical_json_dumps(self) excluding evaluation_hash itself)"""
 ```
 
-`criteria_results` maps `criterion_id` → `EvalResult` for required criteria
-only (optional criteria are evaluated for audit but do not affect the
-decision).
+`criteria_results` covers ALL criteria. Required criteria with
+non-PASS results determine the decision. Optional criteria results
+are audit-only.
 
-### 4.2 final review function contract
-
-```python
-def finalize_review(evaluation: FinalEvaluation) -> bool:
-    """The sole function permitted to apply criterion outcomes and call
-    bounty_review().
-
-    1. Freshly loads submission, bounty, and contract from persistence.
-    2. Validates all bindings in `evaluation` against loaded state.
-    3. Validates review_policy_hash against current contract state.
-    4. Applies PASS→met=True, FAIL→met=False, INDETERMINATE→met=None
-       to the freshly loaded contract (in memory).
-    5. For accept/reject: writes finalization intent, calls bounty_review().
-    6. For indeterminate: does NOT call bounty_review().
-
-    Does NOT accept a caller-mutated contract object.
-    Does NOT persist criterion.met independently before review.
-    """
-```
-
-**Why this must not mutate a contract copy and call existing `bounty_review()` unchanged:** `bounty_review()` (`bounty_review.py:266`) reloads
-its own contract via `_load_contract()`. If a caller sets `criterion.met`
-on an in-memory copy and passes it through, those mutations are invisible
-to `bounty_review()`. The application of criterion outcomes MUST happen
-inside the final review function, after contract reload.
-
-## 5. Exact canonical review-policy hash projection
-
-Computed at submission time and stored in the submission record. Includes
-every decision-relevant immutable policy field:
+## 5. Canonical review-policy hash
 
 ```python
 def compute_review_policy_hash(contract: VillageContract) -> str:
@@ -249,189 +195,200 @@ def compute_review_policy_hash(contract: VillageContract) -> str:
     return sha256(canonical_json_dumps(projection))
 ```
 
-**Explicitly excluded:** `met`, `name`, `description`, `weight` — these
-are mutable result or display fields that do not control evaluation.
+Excludes: `met`, `name`, `description`, `weight` (mutable result/display fields).
 
-## 6. Idempotent finalization protocol (accept and reject)
+## 6. Tamper-evident bindings (captured at `bounty_submit()`)
 
-### 6.1 Finalization intent journal
-
-```python
-# New persistence file: data/village/finalization_journal.json
-# Append-only array of FinalizationIntent records.
-
-@dataclass
-class FinalizationIntent:
-    intent_id: str             # "finalize:<submission_id>:<uuid>"
-    submission_id: str
-    bounty_id: str
-    contract_id: str
-    decision: str              # "accept" | "reject"
-    final_evaluation: dict     # serialized FinalEvaluation
-    created_at: float
-    status: str                # "pending" | "applied" | "failed"
-```
-
-Written BEFORE any bounty/contract mutation. Contains enough immutable
-information to reconstruct and finish the transition after process loss.
-
-### 6.2 Crash recovery matrix
-
-| Crash point | Detectable state | Reconciliation |
-|---|---|---|
-| Before intent write | No intent exists. Submission unreviewed. | Retry evaluation from scratch (evaluator is pure). |
-| After intent write, before `bounty_review()` | Intent exists with status `pending`. No `review` on submission. Bounty `submitted`. Contract `ACTIVE`. | Replay: call `finalize_review()` with the stored FinalEvaluation. It will detect the existing intent and continue from where it left off. |
-| After `bounty_review()`, before contract save | `review` record exists. Contract not yet mutated. | Replay: `finalize_review()` detects `review` exists, calls `_save_contract()` to persist FULFILLED state. |
-| After contract save, before bounty save | Contract FULFILLED. Bounty still `submitted`. | Replay: `finalize_review()` detects inconsistency, persists bounty `done` state. |
-| Reject: review written, bounty still `submitted` | `review` record with `decision="reject"`. Bounty still `submitted`. | Replay: `finalize_review()` detects `review` exists with reject, persists bounty `claimed` reset. |
-| Canonical completion done, GitHub effects missing | Bounty `done`, contract FULFILLED. Issue still open. | `reconcile_review_issue_effects()` (see §7) runs idempotently on next heartbeat. |
-
-**Retry guard:** `_attach_review()` already refuses to overwrite an
-existing review. A retry that reaches the `bounty_review()` call after a
-prior successful review will get `None` and MUST detect this as
-"already completed" rather than "failed."
-
-**Intent cleanup:** After successful finalization (all mutations persisted),
-the intent status is set to `applied`. Intents with status `applied` are
-pruned after a configurable retention period.
-
-## 7. GitHub downstream delivery
-
-### 7.1 Separate function
-
-```python
-def reconcile_review_issue_effects() -> int:
-    """Idempotent delivery of review verdicts to GitHub Issues.
-
-    Reads bounty_submissions.json for reviewed submissions, reconciles
-    against review_requests.json and the current GitHub Issue state.
-    Posts evaluation-attempt comments, final-verdict comments, updates
-    labels, and closes/reopens Issues as needed.
-
-    GitHub API failure does not retry mutation — it leaves the local
-    delivery state unchanged for the next cycle.
-
-    Returns the number of successfully delivered effects.
-    """
-```
-
-### 7.2 Stable markers
-
-```python
-# Evaluation-attempt comment marker:
-# <!-- agent-village-eval-attempt:submission_id=<sid>:attempt=<uuid> -->
-
-# Final verdict comment marker:
-# <!-- agent-village-review-verdict:submission_id=<sid>:decision=<accept|reject> -->
-```
-
-### 7.3 Delivery state persistence
-
-```python
-# In review_requests.json, per submission:
-{
-    "issue_number": 42,
-    "issue_url": "...",
-    "created_at": 1234567890.0,
-    "delivery": {
-        "eval_attempts_delivered": ["<attempt_uuid>", ...],
-        "verdict_delivered": True,
-        "issue_closed": True,
-        "last_delivery_attempt": 1234567890.0,
-        "last_delivery_error": None
-    }
-}
-```
-
-### 7.4 Reconciliation flows
-
-**After GitHub API success but local persistence failure:** On next
-heartbeat, `reconcile_review_issue_effects()` fetches the Issue, detects
-the marker comment already present, and updates local delivery state to
-match (no duplicate comment).
-
-**After canonical completion but GitHub API failure:** Delivery state
-shows `verdict_delivered: False`. Next heartbeat retries the API call.
-The comment marker ensures idempotency — posting the same marker twice
-is harmless (or detected and skipped).
-
-**GitHub remains non-authoritative.** The canonical state is in
-`bounties.json`, `contracts.json`, and `bounty_submissions.json`.
-GitHub Issues are downstream effects only.
-
-## 8. Tamper-evident evidence binding at submission time
-
-Captured during `bounty_submit()` and stored in the submission record:
-
-| Binding | How computed |
+| Binding | Computation |
 |---|---|
 | `output_canonical_hash` | `sha256(canonical_json_dumps(output))` |
-| `review_policy_hash` | `compute_review_policy_hash(contract)` (see §5) |
+| `review_policy_hash` | `compute_review_policy_hash(contract)` |
 | `contract_id` | From `WorkResult.contract_id` |
 | `contract_version` | `VillageContract.version` |
 | `criterion_ids` | `[c.criterion_id for c in contract.success_criteria]` |
 | `criterion_definition_hashes` | `[c.criterion_definition_hash for c in ...]` |
 | `work_result_id` | `WorkResult.work_result_id` |
 | `execution_id` | `WorkResult.execution_id` |
-| `submission_id` | Generated by `_next_submission_id()` |
+| `submission_id` | `_next_submission_id()` |
 
-**`canonical_json_dumps`:** sorted keys, no trailing whitespace, UTF-8,
-no `NaN`/`Infinity` (rejected by existing `load_json_object`).
+## 7. One canonical final-review function
 
-## 9. Automatic-accept policy
+```python
+def apply_review_decision(evaluation: FinalEvaluation) -> bool:
+    """The sole authoritative function for automatic review finalization.
+
+    Located inside the bounty-review / review-authority boundary.
+    Replaces the pattern of 'caller mutates contract, then calls
+    existing bounty_review() unchanged.'
+
+    1. Freshly loads the current submission, bounty, and contract.
+    2. Validates every binding in `evaluation` against loaded state:
+       submission_id, bounty_id, contract_id, contract_version,
+       work_result_id, execution_id, output_canonical_hash,
+       review_policy_hash, criterion_ids, criterion_definition_hashes.
+    3. Validates that submission_id == bounty.current_submission_id.
+    4. Validates that the submission has no existing final review with
+       a conflicting decision, submission_id, evaluation_hash, or
+       reviewer identity. A matching existing review is resumable
+       success. A conflicting review fails closed.
+    5. Applies criteria results to the freshly loaded contract:
+       PASS→met=True, FAIL→met=False, INDETERMINATE→met=None.
+    6. Writes or resumes the finalization record
+       (key: 'finalize:<submission_id>').
+    7. For accept: fulfills the contract (sets FULFILLED), updates
+       bounty to 'done', records completed_at.
+    8. For reject: leaves contract ACTIVE, resets bounty to 'claimed'
+       (same claimed_by), attaches review record.
+    9. For indeterminate: does NOT call this function. Indeterminate
+       evaluations are persisted as evaluation attempts only.
+    10. Marks the finalization record 'complete' (or 'failed_closed').
+
+    Returns True if finalization completed successfully.
+    Returns False if validation failed (failed closed).
+
+    The existing manual CLI (scripts/bounty_review_cli.py) remains a
+    separate explicit-human path and is not affected by this function.
+    """
+```
+
+**Key design decision:** This function does NOT call the existing
+`bounty_review()` unchanged. The old `bounty_review()` reloads its own
+contract internally, which would discard caller-applied criterion
+outcomes. Instead, `apply_review_decision()` performs the contract
+mutation, review attachment, and bounty update itself — it becomes
+the authoritative automatic-review path, while the existing
+`bounty_review()` remains available for the manual CLI path.
+
+## 8. Finalization record (one mutable record per submission)
+
+Key: `finalize:<submission_id>` (deterministic, one per submission).
+
+```python
+# Persisted in data/village/finalization_journal.json
+# One record per submission_id (not append-only — mutable stages).
+
+{
+    "finalize:<submission_id>": {
+        "submission_id": "...",
+        "bounty_id": "...",
+        "evaluation_hash": "...",     # sha256 of the FinalEvaluation
+        "decision": "accept" | "reject",
+        "stage": "prepared"
+            | "review_attached"
+            | "contract_applied"
+            | "bounty_applied"
+            | "complete"
+            | "failed_closed",
+        "review": { ... },            # populated at review_attached
+        "created_at": 1234567890.0,
+        "updated_at": 1234567890.0,
+        "error": null | "error message"
+    }
+}
+```
+
+The `evaluation_hash` and `decision` are set once at `prepared` and
+never changed. Only `stage`, `review`, `updated_at`, and `error` are
+updated during progression.
+
+## 9. Crash recovery bound to exact write order
+
+`apply_review_decision()` writes in this order:
+
+```
+1. finalization record stage: "prepared"
+2. attach review → stage: "review_attached"
+3. contract mutation → stage: "contract_applied"
+4. bounty mutation → stage: "bounty_applied"
+5. mark stage: "complete"
+```
+
+| Detectable state | Reconciliation |
+|---|---|
+| Record exists at `prepared`, no review | Resume from step 2 |
+| Record at `review_attached`, contract unchanged | Resume from step 3 |
+| Record at `contract_applied`, bounty unchanged | Resume from step 4 |
+| Record at `bounty_applied`, not `complete` | Resume from step 5 |
+| Matching review already exists, same evaluation_hash | Resumable success — skip to bounty/contract check |
+| Existing review with different evaluation_hash or decision | **Fail closed** — conflicting review |
+| Canonical completion exists, GitHub delivery missing | `reconcile_review_issue_effects()` handles downstream |
+
+**Both accept and reject** follow the same stage progression. For reject:
+step 3 leaves contract ACTIVE, step 4 resets bounty to `claimed`.
+
+## 10. GitHub downstream delivery
+
+```python
+def reconcile_review_issue_effects() -> int:
+    """Idempotent, non-authoritative. Reads finalization records and
+    review-request Issues, posts verdict comments, updates labels,
+    closes/reopens Issues. GitHub API failure is non-fatal — delivery
+    state is persisted and retried next cycle."""
+```
+
+Stable markers in Issue comments:
+- `<!-- agent-village-review-verdict:submission_id=<sid> -->`
+
+Delivery state persisted in `review_requests.json` per submission.
+GitHub remains non-authoritative — canonical state is in bounties.json,
+contracts.json, bounty_submissions.json, and finalization_journal.json.
+
+## 11. Automatic-accept policy
 
 Automatic acceptance requires ALL of:
 
 1. `contract.auto_review_enabled == True`.
-2. At least one required criterion with a machine evaluator.
+2. At least one required criterion with `evaluator is not None`.
 3. Every required criterion returning `PASS`.
 
-Contracts with **no criteria**, **only optional criteria**, **required
-criteria with `evaluator=None`**, **legacy contracts** (no
-`auto_review_enabled` field), or **`auto_review_enabled=False`** MUST
-result in `INDETERMINATE`.
+INDETERMINATE for: no criteria, only optional criteria, required
+`evaluator=None` criteria, legacy contracts (no `auto_review_enabled`
+field), `auto_review_enabled=False`.
 
-## 10. Decision table
+## 12. Policy-authority invariant
+
+`auto_review_enabled` and evaluator configuration may only be enabled by
+owner-authorized canonical repository state (bounty `contract_terms`
+persisted via a protected merge or explicit owner action).
+
+Moltbook comments, GitHub Issue bodies, WorkResult output, LLM output,
+worker output, and other external ingress **cannot create, modify, or
+enable evaluator policy.** Legacy or externally supplied policy without
+verified authorization results in `INDETERMINATE`.
+
+## 13. Decision table
 
 | Condition | Outcome |
 |---|---|
-| `auto_review_enabled` absent or `False` | **INDETERMINATE** |
-| No criteria, only optional criteria, or required `evaluator=None` | **INDETERMINATE** |
-| All required machine criteria → `PASS` | **accept** |
-| Any required machine criterion → `FAIL` | **reject** |
-| Any required machine criterion → `INDETERMINATE` | **INDETERMINATE** |
-| Unknown evaluator type, invalid params, missing/wrong-type field | **INDETERMINATE** (per-criterion) |
-| Contract version or policy hash mismatch | **INDETERMINATE** |
-| Stale submission (already reviewed) | Existing guard → `None` |
+| `auto_review_enabled` absent or `False` | INDETERMINATE |
+| No criteria / only optional / required `evaluator=None` | INDETERMINATE |
+| Policy from unauthorized external source | INDETERMINATE |
+| All required machine criteria → PASS | **accept** |
+| Any required machine criterion → FAIL | **reject** |
+| Any required machine criterion → INDETERMINATE | INDETERMINATE |
+| Unknown evaluator / invalid params / missing field | INDETERMINATE (per-criterion) |
+| Binding or policy hash mismatch | INDETERMINATE |
+| Conflicting existing review | fail closed |
 
-## 11. Authority and ownership matrix
+## 14. Authority matrix
 
-| Operation | Who | Authority mechanism |
+| Operation | Who | Mechanism |
 |---|---|---|
-| Define criteria | Contract creator | `contract_terms` in bounty record |
-| Run evaluator | `village/evaluator.py` (pure, no I/O) | Deterministic rule code |
-| Produce FinalEvaluation | Evaluator | Immutable frozen dataclass |
-| Write finalization intent | `village/review_authority.py` | Before any mutation |
-| Apply criterion outcomes to contract | `finalize_review()` only | After fresh contract load |
-| Call `bounty_review()` | `finalize_review()` only | After intent write |
-| Call `contract.fulfill()` | `bounty_review()` accept path | Existing guard |
-| Human override | `scripts/bounty_review_cli.py` | Interim, not authenticated |
-| GitHub Issue delivery | `reconcile_review_issue_effects()` | Non-authoritative, idempotent |
+| Define criteria + evaluator config | Contract creator (authorized repo state) | `contract_terms` via protected merge |
+| Enable `auto_review_enabled` | Owner-authorized canonical state only | Never from external ingress |
+| Assign `criterion_id` | System at creation | Opaque, never trusted from external data |
+| Compute `criterion_definition_hash` | System, verified on load | Never trusted from stored external data |
+| Run evaluator | `village/evaluator.py` (pure) | Deterministic rule code |
+| Produce `FinalEvaluation` | Evaluator | Immutable frozen dataclass with self-hash |
+| Apply review decision | `apply_review_decision()` only | Fresh loads, validates all bindings, writes finalization record |
+| Call `contract.fulfill()` | `apply_review_decision()` (accept) | Direct call within review-authority boundary |
+| Human override | `scripts/bounty_review_cli.py` | Separate explicit-human path |
+| GitHub delivery | `reconcile_review_issue_effects()` | Non-authoritative, idempotent |
 
-## 12. Recommended smallest implementation Issue
+## 15. Recommended implementation Issue
 
-**Title:** `village: deterministic review authority — evaluator + finalization protocol + GitHub reconciliation`
+**Title:** `village: deterministic review authority — FinalEvaluation, apply_review_decision, finalization protocol`
 
-**Scope:** `village/evaluator.py` (new), `village/review_authority.py` (new),
-SuccessCriterion extension (criterion_id, criterion_definition_hash),
-`auto_review_enabled` on VillageContract, binding capture in
-`bounty_submit()`, `FinalEvaluation` dataclass, finalization intent journal,
-`finalize_review()`, `reconcile_review_issue_effects()`, heartbeat wiring,
-tests for all evaluator types × outcomes, crash recovery at every point,
-authority boundaries, downstream reconciliation. No production activation.
+**Scope:** `village/evaluator.py` (new), `village/review_authority.py` (new, contains `apply_review_decision`), `SuccessCriterion` extension (`criterion_id`, `criterion_definition_hash`), `VillageContract.auto_review_enabled`, binding capture in `bounty_submit()`, `FinalEvaluation` dataclass, finalization journal, `reconcile_review_issue_effects()`, heartbeat wiring, tests for all evaluator types × outcomes, crash recovery at every stage, authority boundaries, policy-authority invariant tests, downstream reconciliation. No production activation.
 
-**Affected files (estimated):** `village/evaluator.py` (new),
-`village/review_authority.py` (new), `village/contracts.py`,
-`village/bounty_review.py`, `village/heartbeat.py`,
-`tests/test_evaluator.py` (new), `tests/test_review_authority.py` (new),
-`docs/BEFUND.md`.
+**Affected files (estimated):** `village/evaluator.py` (new), `village/review_authority.py` (new), `village/contracts.py`, `village/bounty_review.py`, `village/heartbeat.py`, `tests/test_evaluator.py` (new), `tests/test_review_authority.py` (new), `docs/BEFUND.md`.
