@@ -1,7 +1,14 @@
-# Agent Village — SPEC v0.1 (DRAFT, awaiting approval)
+# Agent Village — SPEC v0.1
 
-Status: **draft, not yet approved**. No code has been moved or written against this
-spec yet. This document exists to be reviewed before any implementation work starts.
+Status: **active, iteratively revised since 2026-07-18.** The original header
+("draft, not yet approved") was written before any code existed. As of 2026-07-20,
+the repository contains production code implementing large portions of this spec
+(heartbeat, brain, bounty board, VillageContract, worker, operator execution,
+submission/review gate, canonical ingress, actor identity, contributions,
+CAPTCHA solving, NADI bridge). The spec has been amended with v1 §1-§6 historical
+record, then later extended with §A-§E, §2.1 migration notes, and inline status
+markers on completed work. Later PRs and BEFUND findings may refine or supersede
+specific sections. See `docs/BEFUND.md` for the implementation timeline.
 
 ## 0. Scope of this document
 

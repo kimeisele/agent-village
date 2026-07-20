@@ -2260,3 +2260,23 @@ Zustandsübergangstabelle, Authority-Matrix und Bypass-Inventur in
 Identity-korrekter Claim + manueller Review-Request via GitHub Issue
 (Option A) + Legacy-`done`-Fix. Slice 2: Deadline/Failure-Lifecycle.
 Slice 3: Deterministisches automatisches Review.
+
+---
+
+## §36 — Repository Governance Bootstrap 01 (2026-07-20)
+
+Per Issue #24. Created root `AGENTS.md` as the single durable bootstrap
+and workflow-governance document. Performed document-status audit on
+`docs/SPEC.md` and `docs/ARCHITECTURE_VISION.md`.
+
+**Status corrections:**
+- `docs/SPEC.md` header updated from "draft, not yet approved" to
+  "active, iteratively revised since 2026-07-18" — the original header
+  was objectively false: code has been in production since migration,
+  22 PRs merged, CI gate established, Branch Protection active.
+  Historical v1 draft context preserved in §0-§6 with an explicit marker
+  at §A ("v1 §1-§6 above stays as historical record").
+- `docs/ARCHITECTURE_VISION.md` correctly declares itself as vision-only
+  — no correction needed.
+
+No product code changed. No new governance files created.
