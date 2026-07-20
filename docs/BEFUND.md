@@ -2323,3 +2323,29 @@ Kein Deadline-Enforcement.
 
 **Tests:** 24 neue Tests in `test_external_bounty_lifecycle_01a.py`.
 Vollständige Suite: 351/351. Ruff/mypy/py_compile grün.
+
+---
+
+## §38 — Deterministic Bounty Review Recon 01 (2026-07-20)
+
+Per Issue #27. Read-only Recon — keine Evaluator-Implementierung.
+
+**Kernbefund:** `SuccessCriterion.met` wird von keinem Produktionscode
+gesetzt. Ohne Evaluator kann `contract.fulfill()` für jeden Contract mit
+`required=True`-Kriterien niemals erfolgreich sein — das `met`-Feld
+bleibt dauerhaft `None`. Der Evaluator ist das einzige fehlende Stück
+im Bounty-Lebenszyklus.
+
+**Spezifikation:**
+- 3 allowlisted Evaluator-Types: `FIELD_PRESENT`, `FIELD_VALUE`, `FIELD_COUNT`
+- Erweiterter `SuccessCriterion` mit `evaluator`- und `evaluator_params`-Feldern
+- 3 fail-closed Outcomes: `accept`, `reject`, `indeterminate`
+- Evaluator strikt getrennt von Worker, Orchestrator, Cognitive Provider
+- Evidence-Binding an submission_id, work_result_id, output_hash,
+  contract_version
+- Review-Request-Issues werden zu Audit-/Exception-/Break-Glass-Surface
+- `bounty_review()` bleibt einzige Completion-Grenze
+
+**Empfohlener Implementierungs-Slice:** `village/evaluator.py` (neu),
+SuccessCriterion-Erweiterung, `scan_pending_reviews()`, Issue-Update,
+Authority-Boundary-Tests. Keine Produktionsaktivierung.
