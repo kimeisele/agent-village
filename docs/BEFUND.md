@@ -2230,3 +2230,28 @@ den Format-Check. Keine Code-Änderung nötig.
 Zusätzlich wurde `cryptography>=41.0` in `requirements-dev.txt` auf
 `cryptography==46.0.6` gepinnt (Version aus lokaler Umgebung, Python
 3.11 kompatibel, CI-grün).
+
+---
+
+## §35 — External Bounty Lifecycle Recon 01 (2026-07-20)
+
+Recon-Phase per Issue #21. Read-only — keine produktive Aktivierung.
+
+**Inventur:** 8 Bounty-Funktionen in 3 Modulen vollständig dokumentiert.
+4 Bounty-Zustände (open, claimed, submitted, done), 7 Contract-Zustände.
+Zustandsübergangstabelle, Authority-Matrix und Bypass-Inventur in
+`docs/research/EXTERNAL_BOUNTY_LIFECYCLE_RECON_01.md`.
+
+**Kernbefunde:**
+- `bounty_complete()` ist totes Code (deaktiviert, kein Bypass).
+- Worker und Orchestrator sind strukturell vom Review-Gate getrennt
+  (17 AST-Tests belegen dies).
+- Die einzige autoritative Completion-Grenze ist `bounty_review(accept)`
+  — aber sie hat keinen Produktionsaufrufer.
+- Deadline-Enforcement, automatische Execution-Triggering und
+  automatisches Review sind isoliert oder nicht implementiert.
+- Die Einzelteile des Lebenszyklus existieren, aber keine durchgängige
+  Verbindung vom externen Claim bis `done`.
+
+**Empfehlung:** Kleinster Implementierungs-PR: `scan_submitted()` +
+`bounty_review`-Aufrufer + Deadline-Enforcement in `run_operator_execution()`.
