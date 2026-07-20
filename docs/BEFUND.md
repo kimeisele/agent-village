@@ -2230,3 +2230,33 @@ den Format-Check. Keine Code-Änderung nötig.
 Zusätzlich wurde `cryptography>=41.0` in `requirements-dev.txt` auf
 `cryptography==46.0.6` gepinnt (Version aus lokaler Umgebung, Python
 3.11 kompatibel, CI-grün).
+
+---
+
+## §35 — External Bounty Lifecycle Recon 01 (2026-07-20)
+
+Recon-Phase per Issue #21. Read-only — keine produktive Aktivierung.
+
+**Inventur:** 8 Bounty-Funktionen in 3 Modulen vollständig dokumentiert.
+4 Bounty-Zustände (open, claimed, submitted, done), 7 Contract-Zustände.
+Zustandsübergangstabelle, Authority-Matrix und Bypass-Inventur in
+`docs/research/EXTERNAL_BOUNTY_LIFECYCLE_RECON_01.md`.
+
+**Kernbefunde:**
+- **ACTIVE DESIGN DEFECT:** `scan_moltbook()` übergibt `sender`
+  (Display-Name) statt `event.actor_id` (kanonische Identität) an
+  `bounty_claim()`. `claimed_by` ist damit ein instabiler Name, keine
+  autoritative Identität. Blockiert die End-to-End-Kette aus Issue #21.
+- `bounty_complete()` ist als Completion-Bypass deaktiviert (Risiko NONE),
+  aber `done bXXX`-Kommentare werden ohne Antwort dauerhaft als verarbeitet
+  markiert (Silent Command Sink — ACTIVE Protokollrisiko).
+- Worker und Orchestrator sind strukturell vom Review-Gate getrennt.
+- Die einzige autoritative Completion-Grenze ist `bounty_review(accept)`
+  — aber sie hat keinen Produktionsaufrufer.
+- Die Einzelteile existieren, aber keine durchgängige Verbindung vom
+  externen Claim bis `done`.
+
+**Empfehlung:** Drei gestaffelte Implementierungs-Slices. Slice 1:
+Identity-korrekter Claim + manueller Review-Request via GitHub Issue
+(Option A) + Legacy-`done`-Fix. Slice 2: Deadline/Failure-Lifecycle.
+Slice 3: Deterministisches automatisches Review.
