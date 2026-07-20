@@ -211,53 +211,93 @@ Excludes: `met`, `name`, `description`, `weight` (mutable result/display fields)
 | `execution_id` | `WorkResult.execution_id` |
 | `submission_id` | `_next_submission_id()` |
 
-## 7. One canonical final-review function
+## 7. `bounty_review()` — sole terminal authority for all review paths
+
+`bounty_review()` (village/bounty_review.py:266) is extended to accept a
+typed discriminated review input. It becomes the single canonical
+final-review transition for both deterministic automatic review and
+explicit manual review. No second independent terminal mutation function
+is created.
+
+### 7.1 Discriminated review input
 
 ```python
-def apply_review_decision(evaluation: FinalEvaluation) -> bool:
-    """The sole authoritative function for automatic review finalization.
+@dataclass(frozen=True)
+class ManualReviewRequest:
+    """Explicit human review via the manual CLI."""
+    reviewer_actor_id: str
+    decision: str  # "accept" | "reject"
+    evidence: dict[str, Any] | None = None
+    # No evaluation fields — human decision, not machine.
 
-    Located inside the bounty-review / review-authority boundary.
-    Replaces the pattern of 'caller mutates contract, then calls
-    existing bounty_review() unchanged.'
+# ReviewInput = FinalEvaluation | ManualReviewRequest
+```
 
-    1. Freshly loads the current submission, bounty, and contract.
-    2. Validates every binding in `evaluation` against loaded state:
-       submission_id, bounty_id, contract_id, contract_version,
-       work_result_id, execution_id, output_canonical_hash,
-       review_policy_hash, criterion_ids, criterion_definition_hashes.
-    3. Validates that submission_id == bounty.current_submission_id.
-    4. Validates that the submission has no existing final review with
-       a conflicting decision, submission_id, evaluation_hash, or
-       reviewer identity. A matching existing review is resumable
-       success. A conflicting review fails closed.
-    5. Applies criteria results to the freshly loaded contract:
-       PASS→met=True, FAIL→met=False, INDETERMINATE→met=None.
-    6. Writes or resumes the finalization record
-       (key: 'finalize:<submission_id>').
-    7. For accept: fulfills the contract (sets FULFILLED), updates
-       bounty to 'done', records completed_at.
-    8. For reject: leaves contract ACTIVE, resets bounty to 'claimed'
-       (same claimed_by), attaches review record.
-    9. For indeterminate: does NOT call this function. Indeterminate
-       evaluations are persisted as evaluation attempts only.
-    10. Marks the finalization record 'complete' (or 'failed_closed').
+### 7.2 Extended `bounty_review()` contract
 
-    Returns True if finalization completed successfully.
-    Returns False if validation failed (failed closed).
+```python
+def bounty_review(
+    review_input: FinalEvaluation | ManualReviewRequest,
+) -> dict[str, Any] | None:
+    """Sole function authorized to attach the final review, fulfill the
+    contract, and terminally mutate the bounty.
 
-    The existing manual CLI (scripts/bounty_review_cli.py) remains a
-    separate explicit-human path and is not affected by this function.
+    For FinalEvaluation (automatic review):
+      1. Freshly loads the current submission, bounty, and contract.
+      2. Validates every immutable binding in the evaluation against
+         loaded state.
+      3. Validates that submission_id == bounty.current_submission_id.
+      4. Validates that the submission has no existing final review
+         with a conflicting decision, submission_id, evaluation_hash,
+         or reviewer identity. A matching existing review is resumable
+         success. A conflicting review fails closed.
+      5. Applies criteria results to the freshly loaded contract:
+         PASS->met=True, FAIL->met=False, INDETERMINATE->met=None.
+      6. Writes or resumes the finalization record
+         (key: 'finalize:<submission_id>').
+      7. For accept: fulfills the contract (FULFILLED), updates bounty
+         to 'done', records completed_at.
+      8. For reject: leaves contract ACTIVE, resets bounty to 'claimed'
+         (same claimed_by).
+      9. Attaches exactly one matching final review.
+      10. Marks finalization record 'complete' (or 'failed_closed').
+
+    For ManualReviewRequest (human CLI):
+      Existing behavior preserved — validates decision, loads bounty
+      and contract, attaches review, fulfills (accept) or resets
+      (reject). No evaluation bindings. No finalization record.
+
+    For INDETERMINATE FinalEvaluation:
+      Does NOT call this function. Indeterminate evaluations are
+      persisted as evaluation attempts only.
+
+    Returns the review result dict on success, None on failure.
     """
 ```
 
-**Key design decision:** This function does NOT call the existing
-`bounty_review()` unchanged. The old `bounty_review()` reloads its own
-contract internally, which would discard caller-applied criterion
-outcomes. Instead, `apply_review_decision()` performs the contract
-mutation, review attachment, and bounty update itself — it becomes
-the authoritative automatic-review path, while the existing
-`bounty_review()` remains available for the manual CLI path.
+### 7.3 Authority architecture
+
+```
+┌──────────────────────┐
+│ Manual CLI           │──ManualReviewRequest──┐
+│ (caller only)        │                       │
+└──────────────────────┘                       │
+                                               ▼
+┌──────────────────────┐    FinalEvaluation    ┌──────────────────┐
+│ Evaluator (pure)     │──────────────────────▶│ bounty_review()  │
+│ never mutates state  │                       │ (sole authority  │
+└──────────────────────┘                       │ for fulfill,     │
+                                               │ review attachment,│
+                                               │ bounty completion)│
+                                               └──────────────────┘
+```
+
+**`apply_review_decision()` is NOT created as a separate authority.**
+A review-authority helper may exist as a non-authoritative private adapter
+that prepares the `FinalEvaluation` and calls `bounty_review()`, but it
+must never call `contract.fulfill()`, `_attach_review()`, or mutate
+contract/bounty persistence itself. All terminal mutation goes through
+`bounty_review()`.
 
 ## 8. Finalization record (one mutable record per submission)
 
@@ -293,7 +333,7 @@ updated during progression.
 
 ## 9. Crash recovery bound to exact write order
 
-`apply_review_decision()` writes in this order:
+`bounty_review()` (automatic path) writes in this order:
 
 ```
 1. finalization record stage: "prepared"
@@ -378,17 +418,18 @@ verified authorization results in `INDETERMINATE`.
 | Enable `auto_review_enabled` | Owner-authorized canonical state only | Never from external ingress |
 | Assign `criterion_id` | System at creation | Opaque, never trusted from external data |
 | Compute `criterion_definition_hash` | System, verified on load | Never trusted from stored external data |
-| Run evaluator | `village/evaluator.py` (pure) | Deterministic rule code |
+| Run evaluator | `village/evaluator.py` (pure) | Deterministic rule code, never mutates state |
 | Produce `FinalEvaluation` | Evaluator | Immutable frozen dataclass with self-hash |
-| Apply review decision | `apply_review_decision()` only | Fresh loads, validates all bindings, writes finalization record |
-| Call `contract.fulfill()` | `apply_review_decision()` (accept) | Direct call within review-authority boundary |
-| Human override | `scripts/bounty_review_cli.py` | Separate explicit-human path |
+| Call `bounty_review()` for automatic review | Review-authority helper (non-authoritative private adapter) | Prepares FinalEvaluation, delegates to `bounty_review()` |
+| Attach final review, fulfill contract, mutate bounty | `bounty_review()` **only** | Sole terminal authority for all review paths |
+| Call `contract.fulfill()` | `bounty_review()` accept path | Direct call within `bounty_review()` |
+| Human review | `scripts/bounty_review_cli.py` → `bounty_review(ManualReviewRequest)` | Caller only, delegates to `bounty_review()` |
 | GitHub delivery | `reconcile_review_issue_effects()` | Non-authoritative, idempotent |
 
 ## 15. Recommended implementation Issue
 
 **Title:** `village: deterministic review authority — FinalEvaluation, apply_review_decision, finalization protocol`
 
-**Scope:** `village/evaluator.py` (new), `village/review_authority.py` (new, contains `apply_review_decision`), `SuccessCriterion` extension (`criterion_id`, `criterion_definition_hash`), `VillageContract.auto_review_enabled`, binding capture in `bounty_submit()`, `FinalEvaluation` dataclass, finalization journal, `reconcile_review_issue_effects()`, heartbeat wiring, tests for all evaluator types × outcomes, crash recovery at every stage, authority boundaries, policy-authority invariant tests, downstream reconciliation. No production activation.
+**Scope:** `village/evaluator.py` (new), `village/review_authority.py` (new, non-authoritative helper that delegates to `bounty_review()`), `bounty_review()` extension (accepts `FinalEvaluation | ManualReviewRequest`), `SuccessCriterion` extension (`criterion_id`, `criterion_definition_hash`), `VillageContract.auto_review_enabled`, binding capture in `bounty_submit()`, `FinalEvaluation` + `ManualReviewRequest` dataclasses, finalization journal, `reconcile_review_issue_effects()`, heartbeat wiring, tests for all evaluator types × outcomes, crash recovery at every stage, authority boundaries (only `bounty_review()` fulfills/completes), policy-authority invariant tests, downstream reconciliation. No production activation.
 
 **Affected files (estimated):** `village/evaluator.py` (new), `village/review_authority.py` (new), `village/contracts.py`, `village/bounty_review.py`, `village/heartbeat.py`, `tests/test_evaluator.py` (new), `tests/test_review_authority.py` (new), `docs/BEFUND.md`.

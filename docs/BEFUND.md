@@ -2326,34 +2326,28 @@ Vollständige Suite: 351/351. Ruff/mypy/py_compile grün.
 
 ---
 
-## §38 — Deterministic Bounty Review Recon 01 (2026-07-20, dritte Korrektur)
+## §38 — Deterministic Bounty Review Recon 01 (2026-07-20, vierte Korrektur)
 
 Per Issue #27. Read-only Recon — keine Evaluator-Implementierung.
 
-**Spezifikation (dritte Korrektur nach Review):**
-- Eine kanonische Final-Review-Funktion: `apply_review_decision(evaluation:
-  FinalEvaluation) -> bool`. Lädt Submission/Bounty/Contract frisch,
-  validiert alle Bindings, wendet Criterion-Outcomes an, schreibt
-  Finalization-Record, erfüllt Contract (accept) oder lässt ihn ACTIVE
-  (reject), aktualisiert Bounty. Ruft NICHT die bestehende
-  `bounty_review()` unverändert auf — diese bleibt für den manuellen
-  CLI-Pfad.
-- Ein kohärentes Finalization-Record-Modell: ein mutabler Record pro
-  Submission, Key `finalize:<submission_id>`, Stages: prepared →
-  review_attached → contract_applied → bounty_applied → complete
-  (oder failed_closed). `evaluation_hash` und `decision` werden einmal
-  gesetzt und nie geändert.
-- Crash-Recovery an die exakte Write-Order von `apply_review_decision()`
-  gebunden. Matching Review = resumable success. Conflicting Review =
-  fail closed.
-- Vollständiges `FinalEvaluation`: `work_result_id`, `execution_id`,
-  `ReviewDecision`-Enum, Results für ALLE Kriterien (required + optional),
-  `evaluation_hash` als Self-Hash über alle Felder.
-- `criterion_id`: system-generiert, opaque, einmal persistiert, unique
-  pro Contract. Nie aus externen `contract_terms` als autoritativ
-  akzeptiert. `criterion_definition_hash`: system-berechnet, bei
-  Deserialisierung verifiziert.
-- Policy-Authority-Invariant: `auto_review_enabled` und Evaluator-
-  Konfiguration ausschließlich durch Owner-authorisierten kanonischen
-  Repository-State. Externe Ingress-Daten dürfen Policy nicht erstellen,
-  ändern oder aktivieren. Nicht autorisierte Policy → INDETERMINATE.
+**Spezifikation (vierte Korrektur nach Review):**
+- `bounty_review()` bleibt die einzige terminale Autorität für alle
+  Review-Pfade. Akzeptiert discriminated Input: `FinalEvaluation` für
+  automatisches Review, `ManualReviewRequest` für manuelles CLI.
+- Für automatisches Review lädt `bounty_review()` Submission/Bounty/
+  Contract frisch, validiert alle Bindings, wendet Criterion-Outcomes
+  an, schreibt Finalization-Record, attached Review, fulfilled Contract
+  (accept) oder lässt ihn ACTIVE (reject), aktualisiert Bounty.
+- Kein `apply_review_decision()` als separate Autorität. Ein
+  Review-Authority-Helper darf als nicht-authoritativer privater Adapter
+  existieren, der `FinalEvaluation` vorbereitet und an `bounty_review()`
+  delegiert — aber niemals `contract.fulfill()`, `_attach_review()` oder
+  Contract/Bounty-Persistenz selbst aufruft.
+- Manual CLI bleibt Caller, nicht separate Mutations-Autorität.
+- Finalization-Record: ein mutabler Record pro Submission, Key
+  `finalize:<submission_id>`, Stages: prepared → review_attached →
+  contract_applied → bounty_applied → complete (oder failed_closed).
+- Crash-Recovery an Write-Order von `bounty_review()` gebunden.
+- Alle vorherigen Korrekturen (immutable FinalEvaluation, criterion_id/
+  definition_hash, Policy-Authority-Invariant, Parameter-Bounds,
+  GitHub-Downstream-Delivery) bleiben unverändert.
