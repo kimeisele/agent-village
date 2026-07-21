@@ -12,6 +12,7 @@ from village.contracts import (
     VillageContract,
     canonical_json_dumps,
 )
+from village.evaluator import EvalResult
 from village.final_evaluation import (
     FinalEvaluation,
     ReviewDecision,
@@ -184,8 +185,8 @@ class TestArtifactIntegrity:
         assert verify_evaluation_hash(fe)
         d = fe.to_dict()
         d["evaluation_hash"] = "0" * 64
-        fe2 = FinalEvaluation.from_dict(d)
-        assert not verify_evaluation_hash(fe2)
+        with pytest.raises(ValueError, match="evaluation_hash mismatch"):
+            FinalEvaluation.from_persisted_dict(d)
 
     def test_canonical_roundtrip_preserves_hash(self):
         c = SuccessCriterion.create(
@@ -194,7 +195,7 @@ class TestArtifactIntegrity:
         contract = _make_contract(success_criteria=[c])
         sub = _make_submission(contract, output={"gaps": [1]})
         fe = build_final_evaluation(sub, contract, evaluated_at=1.0)
-        restored = FinalEvaluation.from_dict(fe.to_dict())
+        restored = FinalEvaluation.from_persisted_dict(fe.to_dict())
         assert restored.evaluation_hash == fe.evaluation_hash
 
 
@@ -250,3 +251,94 @@ class TestPurity:
             if isinstance(node, ast.Call):
                 if isinstance(node.func, ast.Name) and node.func.id in ("bounty_review", "contract.fulfill"):
                     pytest.fail("final_evaluation calls terminal authority")
+
+
+# ── AST import boundaries ────────────────────────────────────
+
+
+class TestImportBoundaries:
+    def test_final_evaluation_does_not_import_bounty_review(self):
+        import ast
+
+        with open("village/final_evaluation.py") as f:
+            tree = ast.parse(f.read())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                if node.module and "bounty_review" in node.module:
+                    pytest.fail("final_evaluation imports bounty_review")
+
+    def test_submission_bindings_does_not_import_terminal(self):
+        import ast
+
+        with open("village/submission_bindings.py") as f:
+            tree = ast.parse(f.read())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                if node.module and any(t in (node.module or "") for t in ("heartbeat", "bounty_review")):
+                    pytest.fail("submission_bindings imports terminal module")
+
+
+# ── Complete criterion coverage ──────────────────────────────
+
+
+class TestCompleteCoverage:
+    def test_binding_failure_has_criterion_results(self):
+        c = SuccessCriterion.create(
+            name="a", required=True, evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "x"}
+        )
+        contract = _make_contract(success_criteria=[c])
+        sub = {"submission_id": "s:1"}
+        fe = build_final_evaluation(sub, contract, evaluated_at=1.0)
+        assert len(fe.criteria_results) == 1
+        assert fe.criteria_results[0].result == EvalResult.INDETERMINATE
+
+    def test_auto_review_disabled_has_criterion_results(self):
+        c = SuccessCriterion.create(
+            name="a", required=True, evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "x"}
+        )
+        contract = _make_contract(success_criteria=[c], auto_review_enabled=False)
+        sub = _make_submission(contract, output={"x": [1]})
+        fe = build_final_evaluation(sub, contract, evaluated_at=1.0)
+        assert len(fe.criteria_results) == 1
+        assert "auto_review_disabled" in fe.criteria_results[0].reason_code
+
+
+# ── Persisted loading fails closed ──────────────────────────
+
+
+class TestPersistedLoading:
+    def test_missing_hash_rejected(self):
+        c = SuccessCriterion.create(
+            name="a", required=True, evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "x"}
+        )
+        contract = _make_contract(success_criteria=[c])
+        sub = _make_submission(contract, output={"x": [1]})
+        fe = build_final_evaluation(sub, contract, evaluated_at=1.0)
+        d = fe.to_dict()
+        del d["evaluation_hash"]
+        with pytest.raises(ValueError, match="evaluation_hash"):
+            FinalEvaluation.from_persisted_dict(d)
+
+    def test_malformed_enum_rejected(self):
+        c = SuccessCriterion.create(
+            name="a", required=True, evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "x"}
+        )
+        contract = _make_contract(success_criteria=[c])
+        sub = _make_submission(contract, output={"x": [1]})
+        fe = build_final_evaluation(sub, contract, evaluated_at=1.0)
+        d = fe.to_dict()
+        d["criteria_results"][0]["result"] = "INVALID"
+        with pytest.raises(ValueError, match="EvalResult"):
+            FinalEvaluation.from_persisted_dict(d)
+
+    def test_nan_evaluated_at_rejected(self):
+        c = SuccessCriterion.create(
+            name="a", required=True, evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "x"}
+        )
+        contract = _make_contract(success_criteria=[c])
+        sub = _make_submission(contract, output={"x": [1]})
+        fe = build_final_evaluation(sub, contract, evaluated_at=1.0)
+        d = fe.to_dict()
+        d["evaluated_at"] = float("nan")
+        with pytest.raises(ValueError, match="finite"):
+            FinalEvaluation.from_persisted_dict(d)

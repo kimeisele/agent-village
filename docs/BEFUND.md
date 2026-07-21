@@ -2377,7 +2377,28 @@ Finalization-Journal, Bounty-Completion.
 **Tests:** 53 neue. Vollständige Suite: 404/404. Ruff/mypy/py_compile grün.
 ---
 
-## §40 — External Bounty Lifecycle 02C (2026-07-21)
+## §40 — External Bounty Lifecycle 02C (2026-07-21, korrigiert)
+
+Per Issue #116. Immutable FinalEvaluation + pure Decision-Aggregation.
+
+**Architektur (korrigiert nach Review):**
+- `village/submission_bindings.py`: neutrales Modul (kein I/O, kein Heartbeat,
+  kein Review-Authority-Import). `validate_submission_bindings()` wird von
+  `final_evaluation.py` und `bounty_review.py` importiert.
+- `village/final_evaluation.py`: importiert NUR neutrale Module
+  (contracts, evaluator, submission_bindings). Kein bounty_review-Import.
+- `FinalEvaluation.create()`: trusted creation, computed Hash.
+- `FinalEvaluation.from_persisted_dict()`: fail-closed Loading — validiert
+  Types, Enums, finite evaluated_at, bounded reason_codes, recomputed
+  evaluation_hash, reject on mismatch.
+- `build_final_evaluation()`: vollständige Criterion-Coverage für ALLE
+  Outcomes (auch INDETERMINATE-Pfade). Kein leeres criteria_results wenn
+  Contract Kriterien hat.
+- `validate_final_evaluation()`: pure structural validator, nie raise.
+- INDETERMINATE outranks FAIL.
+- Reason-Codes nur mit validiertem field path oder static code.
+
+**Tests:** 26 neue in test_final_evaluation.py. Suite: 430/430. (2026-07-21)
 
 Per Issue #116. Immutable FinalEvaluation und pure Decision-Aggregation.
 

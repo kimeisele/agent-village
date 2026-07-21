@@ -1,13 +1,14 @@
 """Immutable FinalEvaluation artifact and pure decision aggregation.
 
 Side-effect-free: no file I/O, no network I/O, no state mutation.
-Never imports heartbeat, GitHub, review, or terminal-mutation modules.
+Never imports bounty_review, heartbeat, GitHub, or terminal-mutation modules.
 Never calls bounty_review(), contract.fulfill(), or _attach_review().
 """
 
 from __future__ import annotations
 
 import hashlib
+import math
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -20,8 +21,10 @@ from village.contracts import (
     compute_review_policy_hash,
 )
 from village.evaluator import EvalResult, evaluate_criterion
+from village.submission_bindings import validate_submission_bindings
 
 EVALUATOR_VERSION = "02c-1"
+MAX_REASON_CODE_LEN = 128
 
 
 class ReviewDecision(str, Enum):
@@ -32,8 +35,6 @@ class ReviewDecision(str, Enum):
 
 @dataclass(frozen=True)
 class CriterionEvaluation:
-    """Immutable result of evaluating one criterion against submitted output."""
-
     criterion_id: str
     criterion_definition_hash: str
     result: EvalResult
@@ -42,13 +43,6 @@ class CriterionEvaluation:
 
 @dataclass(frozen=True)
 class FinalEvaluation:
-    """Immutable, self-hashed evaluation artifact for one submission.
-
-    Produced by build_final_evaluation(). Carries all fields needed
-    for a later review authority to apply the decision without
-    trusting a caller-mutated contract or re-evaluating.
-    """
-
     submission_id: str
     bounty_id: str
     contract_id: str
@@ -64,10 +58,139 @@ class FinalEvaluation:
     evaluated_at: float
     evaluation_hash: str = ""
 
-    def __post_init__(self) -> None:
-        if not self.evaluation_hash:
-            h = compute_evaluation_hash(self)
-            object.__setattr__(self, "evaluation_hash", h)
+    @classmethod
+    def create(
+        cls,
+        submission_id: str,
+        bounty_id: str,
+        contract_id: str,
+        contract_version: str,
+        work_result_id: str,
+        execution_id: str,
+        output_canonical_hash: str,
+        review_policy_hash: str,
+        criteria_results: tuple[CriterionEvaluation, ...],
+        overall_decision: ReviewDecision,
+        reason_codes: tuple[str, ...],
+        evaluator_version: str,
+        evaluated_at: float,
+    ) -> "FinalEvaluation":
+        """Trusted creation — computes and assigns the evaluation hash."""
+        inst = cls(
+            submission_id=submission_id,
+            bounty_id=bounty_id,
+            contract_id=contract_id,
+            contract_version=contract_version,
+            work_result_id=work_result_id,
+            execution_id=execution_id,
+            output_canonical_hash=output_canonical_hash,
+            review_policy_hash=review_policy_hash,
+            criteria_results=criteria_results,
+            overall_decision=overall_decision,
+            reason_codes=reason_codes,
+            evaluator_version=evaluator_version,
+            evaluated_at=evaluated_at,
+            evaluation_hash="",
+        )
+        h = compute_evaluation_hash(inst)
+        object.__setattr__(inst, "evaluation_hash", h)
+        return inst
+
+    @classmethod
+    def from_persisted_dict(cls, d: dict[str, Any]) -> "FinalEvaluation":
+        """Load from persisted data. Fails closed on any structural or hash
+        mismatch. Never trusts a supplied hash without recomputation."""
+        # Validate field types
+        for f in (
+            "submission_id",
+            "bounty_id",
+            "contract_id",
+            "contract_version",
+            "work_result_id",
+            "execution_id",
+            "output_canonical_hash",
+            "review_policy_hash",
+            "evaluator_version",
+        ):
+            if not isinstance(d.get(f), str):
+                raise ValueError(f"FinalEvaluation: {f} must be a string")
+        if not isinstance(d.get("evaluated_at"), (int, float)):
+            raise ValueError("FinalEvaluation: evaluated_at must be a number")
+        if math.isnan(d["evaluated_at"]) or math.isinf(d["evaluated_at"]):
+            raise ValueError("FinalEvaluation: evaluated_at must be finite")
+        overall = d.get("overall_decision")
+        try:
+            decision = ReviewDecision(overall)
+        except (ValueError, TypeError):
+            raise ValueError(f"FinalEvaluation: invalid overall_decision {overall!r}")
+        supplied_hash = d.get("evaluation_hash", "")
+        if not isinstance(supplied_hash, str) or not supplied_hash:
+            raise ValueError("FinalEvaluation: missing or invalid evaluation_hash")
+
+        rc = d.get("reason_codes", [])
+        if not isinstance(rc, list):
+            raise ValueError("FinalEvaluation: reason_codes must be a list")
+        reason_codes: list[str] = []
+        for r in rc:
+            if not isinstance(r, str) or len(r) > MAX_REASON_CODE_LEN:
+                raise ValueError("FinalEvaluation: reason_code too long or non-string")
+
+        cr_list = d.get("criteria_results", [])
+        if not isinstance(cr_list, list):
+            raise ValueError("FinalEvaluation: criteria_results must be a list")
+        criteria_results: list[CriterionEvaluation] = []
+        seen_ids: set[str] = set()
+        for cr in cr_list:
+            if not isinstance(cr, dict):
+                raise ValueError("FinalEvaluation: criterion result must be a dict")
+            cid = cr.get("criterion_id", "")
+            if not isinstance(cid, str) or not cid:
+                raise ValueError("FinalEvaluation: invalid criterion_id")
+            if cid in seen_ids:
+                raise ValueError(f"FinalEvaluation: duplicate criterion_id {cid}")
+            seen_ids.add(cid)
+            ch = cr.get("criterion_definition_hash", "")
+            if not isinstance(ch, str) or len(ch) != 64:
+                raise ValueError("FinalEvaluation: invalid criterion_definition_hash")
+            try:
+                result = EvalResult(cr.get("result"))
+            except (ValueError, TypeError):
+                raise ValueError("FinalEvaluation: invalid EvalResult")
+            rcode = cr.get("reason_code", "")
+            if not isinstance(rcode, str) or len(rcode) > MAX_REASON_CODE_LEN:
+                raise ValueError("FinalEvaluation: reason_code too long or non-string")
+            criteria_results.append(
+                CriterionEvaluation(
+                    criterion_id=cid,
+                    criterion_definition_hash=ch,
+                    result=result,
+                    reason_code=rcode,
+                )
+            )
+
+        inst = cls(
+            submission_id=d["submission_id"],
+            bounty_id=d["bounty_id"],
+            contract_id=d["contract_id"],
+            contract_version=d["contract_version"],
+            work_result_id=d["work_result_id"],
+            execution_id=d["execution_id"],
+            output_canonical_hash=d["output_canonical_hash"],
+            review_policy_hash=d["review_policy_hash"],
+            criteria_results=tuple(criteria_results),
+            overall_decision=decision,
+            reason_codes=tuple(reason_codes),
+            evaluator_version=d["evaluator_version"],
+            evaluated_at=d["evaluated_at"],
+            evaluation_hash=supplied_hash,
+        )
+        recomputed = compute_evaluation_hash(inst)
+        if recomputed != supplied_hash:
+            raise ValueError(
+                f"FinalEvaluation: evaluation_hash mismatch "
+                f"(supplied={supplied_hash[:16]}..., computed={recomputed[:16]}...)"
+            )
+        return inst
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -95,37 +218,8 @@ class FinalEvaluation:
             "evaluation_hash": self.evaluation_hash,
         }
 
-    @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "FinalEvaluation":
-        results = tuple(
-            CriterionEvaluation(
-                criterion_id=c["criterion_id"],
-                criterion_definition_hash=c["criterion_definition_hash"],
-                result=EvalResult(c["result"]),
-                reason_code=c["reason_code"],
-            )
-            for c in d["criteria_results"]
-        )
-        return cls(
-            submission_id=d["submission_id"],
-            bounty_id=d["bounty_id"],
-            contract_id=d["contract_id"],
-            contract_version=d["contract_version"],
-            work_result_id=d["work_result_id"],
-            execution_id=d["execution_id"],
-            output_canonical_hash=d["output_canonical_hash"],
-            review_policy_hash=d["review_policy_hash"],
-            criteria_results=results,
-            overall_decision=ReviewDecision(d["overall_decision"]),
-            reason_codes=tuple(d["reason_codes"]),
-            evaluator_version=d["evaluator_version"],
-            evaluated_at=d["evaluated_at"],
-            evaluation_hash=d.get("evaluation_hash", ""),
-        )
-
 
 def compute_evaluation_hash(evaluation: FinalEvaluation) -> str:
-    """Canonical hash over every authoritative field except evaluation_hash."""
     projection: dict[str, object] = {
         "submission_id": evaluation.submission_id,
         "bounty_id": evaluation.bounty_id,
@@ -153,18 +247,23 @@ def compute_evaluation_hash(evaluation: FinalEvaluation) -> str:
 
 
 def verify_evaluation_hash(evaluation: FinalEvaluation) -> bool:
-    """Recompute and compare the evaluation hash. Returns True if valid."""
     return compute_evaluation_hash(evaluation) == evaluation.evaluation_hash
 
 
 def _criterion_reason_code(criterion: SuccessCriterion, result: EvalResult) -> str:
-    """Build a bounded, deterministic reason code for one criterion evaluation."""
+    """Build a bounded, deterministic reason code."""
     if not criterion.criterion_id or not criterion.criterion_definition_hash:
         return "criterion:legacy_unbound"
     if criterion.evaluator is None:
         return f"criterion:{criterion.criterion_id[:8]}:human_only"
     ev_type = criterion.evaluator.value
-    field = str(criterion.evaluator_params.get("field", "?"))[:64]
+    try:
+        from village.contracts import validate_evaluator_config
+
+        validate_evaluator_config(criterion.evaluator, criterion.evaluator_params)
+        field = str(criterion.evaluator_params.get("field", "?"))[:64]
+    except ValueError:
+        return "criterion:invalid_configuration"
     if result == EvalResult.PASS:
         return f"{ev_type}:{field}:pass"
     elif result == EvalResult.FAIL:
@@ -173,32 +272,42 @@ def _criterion_reason_code(criterion: SuccessCriterion, result: EvalResult) -> s
         return f"{ev_type}:{field}:indeterminate"
 
 
+def _indeterminate_criterion_result(criterion: SuccessCriterion, reason: str) -> CriterionEvaluation:
+    """Create an INDETERMINATE result for a criterion that cannot be evaluated."""
+    return CriterionEvaluation(
+        criterion_id=criterion.criterion_id or "",
+        criterion_definition_hash=criterion.criterion_definition_hash or "",
+        result=EvalResult.INDETERMINATE,
+        reason_code=reason[:MAX_REASON_CODE_LEN],
+    )
+
+
+def _criterion_is_required(contract: VillageContract, criterion_id: str) -> bool:
+    for c in contract.success_criteria:
+        if c.criterion_id == criterion_id:
+            return c.required
+    return False
+
+
 def build_final_evaluation(
     submission: dict[str, Any],
     contract: VillageContract,
     *,
     evaluated_at: float = 0.0,
 ) -> FinalEvaluation:
-    """Pure, non-authoritative aggregation of per-criterion evaluations.
-
-    1. Validates submission bindings (reuses validate_submission_bindings).
-    2. Evaluates every criterion via evaluate_criterion().
-    3. Applies the required-criterion decision policy.
-    4. Returns an immutable, self-hashed FinalEvaluation.
-
-    Never mutates state. Never performs I/O. Never calls terminal authority.
-    """
-    from village.bounty_review import validate_submission_bindings
-
+    """Pure, non-authoritative aggregation of per-criterion evaluations."""
     if evaluated_at == 0.0:
         evaluated_at = time.time()
 
     reason_codes: list[str] = []
+    criteria = list(contract.success_criteria)
 
-    # Validate bindings first — any failure → INDETERMINATE
+    # Validate bindings
     binding_errors = validate_submission_bindings(submission, contract)
     if binding_errors:
-        return FinalEvaluation(
+        # Complete criterion coverage even on binding failure
+        results = tuple(_indeterminate_criterion_result(c, "criterion:evaluation_not_authorized") for c in criteria)
+        return FinalEvaluation.create(
             submission_id=str(submission.get("submission_id", "")),
             bounty_id=str(submission.get("bounty_id", "")),
             contract_id=contract.contract_id,
@@ -207,7 +316,7 @@ def build_final_evaluation(
             execution_id=str(submission.get("execution_id", "")),
             output_canonical_hash=str(submission.get("output_canonical_hash", "")),
             review_policy_hash=compute_review_policy_hash(contract),
-            criteria_results=(),
+            criteria_results=results,
             overall_decision=ReviewDecision.INDETERMINATE,
             reason_codes=tuple(f"binding:{e}" for e in binding_errors),
             evaluator_version=EVALUATOR_VERSION,
@@ -216,7 +325,8 @@ def build_final_evaluation(
 
     # Check auto-review policy
     if not contract.auto_review_enabled:
-        return FinalEvaluation(
+        results = tuple(_indeterminate_criterion_result(c, "policy:auto_review_disabled") for c in criteria)
+        return FinalEvaluation.create(
             submission_id=submission["submission_id"],
             bounty_id=submission["bounty_id"],
             contract_id=contract.contract_id,
@@ -225,7 +335,7 @@ def build_final_evaluation(
             execution_id=submission["execution_id"],
             output_canonical_hash=submission["output_canonical_hash"],
             review_policy_hash=compute_review_policy_hash(contract),
-            criteria_results=(),
+            criteria_results=results,
             overall_decision=ReviewDecision.INDETERMINATE,
             reason_codes=("policy:auto_review_disabled",),
             evaluator_version=EVALUATOR_VERSION,
@@ -234,15 +344,15 @@ def build_final_evaluation(
 
     # Evaluate every criterion
     has_required_machine = False
-    results: list[CriterionEvaluation] = []
+    eval_results: list[CriterionEvaluation] = []
     output = submission.get("output")
     if not isinstance(output, dict):
         output = {}
 
-    for criterion in contract.success_criteria:
+    for criterion in criteria:
         result = evaluate_criterion(criterion, output)
         reason = _criterion_reason_code(criterion, result)
-        results.append(
+        eval_results.append(
             CriterionEvaluation(
                 criterion_id=criterion.criterion_id,
                 criterion_definition_hash=criterion.criterion_definition_hash,
@@ -258,13 +368,16 @@ def build_final_evaluation(
     # Decision policy
     if not has_required_machine:
         decision = ReviewDecision.INDETERMINATE
-        if not any(r == "policy:auto_review_disabled" for r in reason_codes):
-            reason_codes.append("policy:no_required_machine_criterion")
+        reason_codes.append("policy:no_required_machine_criterion")
     else:
         has_indeterminate = any(
-            c.result == EvalResult.INDETERMINATE for c in results if _criterion_is_required(contract, c.criterion_id)
+            c.result == EvalResult.INDETERMINATE
+            for c in eval_results
+            if _criterion_is_required(contract, c.criterion_id)
         )
-        has_fail = any(c.result == EvalResult.FAIL for c in results if _criterion_is_required(contract, c.criterion_id))
+        has_fail = any(
+            c.result == EvalResult.FAIL for c in eval_results if _criterion_is_required(contract, c.criterion_id)
+        )
         if has_indeterminate:
             decision = ReviewDecision.INDETERMINATE
         elif has_fail:
@@ -272,7 +385,7 @@ def build_final_evaluation(
         else:
             decision = ReviewDecision.ACCEPT
 
-    return FinalEvaluation(
+    return FinalEvaluation.create(
         submission_id=submission["submission_id"],
         bounty_id=submission["bounty_id"],
         contract_id=contract.contract_id,
@@ -281,7 +394,7 @@ def build_final_evaluation(
         execution_id=submission["execution_id"],
         output_canonical_hash=submission["output_canonical_hash"],
         review_policy_hash=compute_review_policy_hash(contract),
-        criteria_results=tuple(results),
+        criteria_results=tuple(eval_results),
         overall_decision=decision,
         reason_codes=tuple(reason_codes),
         evaluator_version=EVALUATOR_VERSION,
@@ -289,8 +402,64 @@ def build_final_evaluation(
     )
 
 
-def _criterion_is_required(contract: VillageContract, criterion_id: str) -> bool:
+def validate_final_evaluation(
+    evaluation: FinalEvaluation,
+    submission: dict[str, Any],
+    contract: VillageContract,
+) -> list[str]:
+    """Pure structural validator. Returns reason codes, never raises."""
+    reasons: list[str] = []
+    if not verify_evaluation_hash(evaluation):
+        reasons.append("invalid_evaluation_hash")
+    if evaluation.submission_id != submission.get("submission_id"):
+        reasons.append("submission_id_mismatch")
+    if evaluation.bounty_id != submission.get("bounty_id"):
+        reasons.append("bounty_id_mismatch")
+    if evaluation.contract_id != contract.contract_id:
+        reasons.append("contract_id_mismatch")
+    if evaluation.contract_version != contract.version:
+        reasons.append("contract_version_mismatch")
+    if evaluation.evaluator_version != EVALUATOR_VERSION:
+        reasons.append(f"unsupported_evaluator_version:{evaluation.evaluator_version[:32]}")
+
+    seen: set[str] = set()
+    contract_ids = [c.criterion_id for c in contract.success_criteria]
+    for i, cr in enumerate(evaluation.criteria_results):
+        if cr.criterion_id in seen:
+            reasons.append(f"duplicate_criterion_id:{cr.criterion_id[:16]}")
+        seen.add(cr.criterion_id)
+        if i >= len(contract_ids) or cr.criterion_id != contract_ids[i]:
+            reasons.append("criterion_order_or_count_mismatch")
+            break
+        expected_ch = contract.success_criteria[i].criterion_definition_hash
+        if cr.criterion_definition_hash != expected_ch:
+            reasons.append(f"criterion_definition_hash_mismatch:{cr.criterion_id[:16]}")
+
+    if len(evaluation.criteria_results) != len(contract.success_criteria):
+        reasons.append("criterion_count_mismatch")
+
+    # Decision consistency: recompute and compare
+    has_indeterminate = False
+    has_fail = False
+    has_required_machine = False
     for c in contract.success_criteria:
-        if c.criterion_id == criterion_id:
-            return c.required
-    return False
+        if c.required and c.evaluator is not None:
+            has_required_machine = True
+    for cr in evaluation.criteria_results:
+        if _criterion_is_required(contract, cr.criterion_id):
+            if cr.result == EvalResult.INDETERMINATE:
+                has_indeterminate = True
+            elif cr.result == EvalResult.FAIL:
+                has_fail = True
+    if not contract.auto_review_enabled or not has_required_machine:
+        expected = ReviewDecision.INDETERMINATE
+    elif has_indeterminate:
+        expected = ReviewDecision.INDETERMINATE
+    elif has_fail:
+        expected = ReviewDecision.REJECT
+    else:
+        expected = ReviewDecision.ACCEPT
+    if evaluation.overall_decision != expected:
+        reasons.append(f"decision_inconsistent: got={evaluation.overall_decision.value} expected={expected.value}")
+
+    return reasons
