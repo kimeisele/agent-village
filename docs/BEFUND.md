@@ -2377,7 +2377,25 @@ Finalization-Journal, Bounty-Completion.
 **Tests:** 53 neue. Vollständige Suite: 404/404. Ruff/mypy/py_compile grün.
 ---
 
-## §40 — External Bounty Lifecycle 02C (2026-07-21, korrigiert)
+## §40 — External Bounty Lifecycle 02C (2026-07-21, zweite Korrektur)
+
+Per Issue #116. Immutable FinalEvaluation + pure Decision-Aggregation.
+
+**Architektur:**
+- `village/submission_bindings.py`: neutral (kein Terminal/Heartbeat-Import).
+- `FinalEvaluation.create()`: trusted creation mit Syntax-Validation.
+- `FinalEvaluation.from_persisted_dict()`: fail-closed — validiert Types, Enums,
+  finite evaluated_at, reason_code Syntax, recomputed Hash, reject on Mismatch.
+  Bewahrt validierte Reason-Codes in Original-Reihenfolge.
+- `_validate_reason_code_syntax()`: ASCII-Allowlist `[a-zA-Z0-9_:.=-]+`,
+  nonempty, MAX_REASON_CODE_LEN.
+- `validate_final_evaluation()`: vollständige Binding-Validation inkl.
+  work_result_id, execution_id, output_canonical_hash, review_policy_hash
+  (submission + contract). Reason-Code-Syntax-Check. Nie raise.
+- `build_final_evaluation()`: vollständige Criterion-Coverage für ALLE Outcomes.
+- INDETERMINATE outranks FAIL.
+
+**Tests:** 40 neue. Suite: 444/444. Ruff/mypy/py_compile grün.
 
 Per Issue #116. Immutable FinalEvaluation + pure Decision-Aggregation.
 

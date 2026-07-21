@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import re as _re
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -25,6 +26,22 @@ from village.submission_bindings import validate_submission_bindings
 
 EVALUATOR_VERSION = "02c-1"
 MAX_REASON_CODE_LEN = 128
+_REASON_CODE_RE = _re.compile(r"^[a-zA-Z0-9_:.=-]+$")
+
+
+def _validate_reason_code_syntax(code: str) -> None:
+    """Validate reason-code syntax. Raises ValueError on violation."""
+    if not code:
+        raise ValueError("reason_code must be non-empty")
+    if len(code) > MAX_REASON_CODE_LEN:
+        raise ValueError(f"reason_code too long ({len(code)} > {MAX_REASON_CODE_LEN})")
+    if not _REASON_CODE_RE.match(code):
+        raise ValueError(f"reason_code contains invalid characters: {code[:64]!r}")
+
+
+def _validate_finite_float(value: float) -> None:
+    if not isinstance(value, (int, float)) or math.isnan(value) or math.isinf(value):
+        raise ValueError("evaluated_at must be a finite number")
 
 
 class ReviewDecision(str, Enum):
@@ -76,6 +93,15 @@ class FinalEvaluation:
         evaluated_at: float,
     ) -> "FinalEvaluation":
         """Trusted creation — computes and assigns the evaluation hash."""
+        # Trusted creation must reject what the loader/validator would reject
+        _validate_finite_float(evaluated_at)
+        for rc in reason_codes:
+            _validate_reason_code_syntax(rc)
+        for cr in criteria_results:
+            _validate_reason_code_syntax(cr.reason_code)
+        if evaluator_version != EVALUATOR_VERSION:
+            raise ValueError(f"unsupported evaluator_version: {evaluator_version}")
+
         inst = cls(
             submission_id=submission_id,
             bounty_id=bounty_id,
@@ -134,6 +160,8 @@ class FinalEvaluation:
         for r in rc:
             if not isinstance(r, str) or len(r) > MAX_REASON_CODE_LEN:
                 raise ValueError("FinalEvaluation: reason_code too long or non-string")
+            _validate_reason_code_syntax(r)
+            reason_codes.append(r)
 
         cr_list = d.get("criteria_results", [])
         if not isinstance(cr_list, list):
@@ -159,6 +187,7 @@ class FinalEvaluation:
             rcode = cr.get("reason_code", "")
             if not isinstance(rcode, str) or len(rcode) > MAX_REASON_CODE_LEN:
                 raise ValueError("FinalEvaluation: reason_code too long or non-string")
+            _validate_reason_code_syntax(rcode)
             criteria_results.append(
                 CriterionEvaluation(
                     criterion_id=cid,
@@ -419,8 +448,34 @@ def validate_final_evaluation(
         reasons.append("contract_id_mismatch")
     if evaluation.contract_version != contract.version:
         reasons.append("contract_version_mismatch")
+    if evaluation.work_result_id != submission.get("work_result_id"):
+        reasons.append("work_result_id_mismatch")
+    if evaluation.execution_id != submission.get("execution_id"):
+        reasons.append("execution_id_mismatch")
+    if evaluation.output_canonical_hash != submission.get("output_canonical_hash"):
+        reasons.append("output_canonical_hash_mismatch")
+    if evaluation.review_policy_hash != submission.get("review_policy_hash"):
+        reasons.append("review_policy_hash_mismatch")
+    try:
+        expected_policy = compute_review_policy_hash(contract)
+        if evaluation.review_policy_hash != expected_policy:
+            reasons.append("review_policy_hash_mismatch_contract")
+    except (ValueError, TypeError):
+        reasons.append("review_policy_hash_not_canonical")
     if evaluation.evaluator_version != EVALUATOR_VERSION:
         reasons.append(f"unsupported_evaluator_version:{evaluation.evaluator_version[:32]}")
+
+    # Validate reason code syntax in both top-level and criterion results
+    for i, rc in enumerate(evaluation.reason_codes):
+        try:
+            _validate_reason_code_syntax(rc)
+        except ValueError:
+            reasons.append(f"invalid_reason_code:{i}")
+    for i, cr in enumerate(evaluation.criteria_results):
+        try:
+            _validate_reason_code_syntax(cr.reason_code)
+        except ValueError:
+            reasons.append(f"invalid_criterion_reason_code:{i}")
 
     seen: set[str] = set()
     contract_ids = [c.criterion_id for c in contract.success_criteria]
