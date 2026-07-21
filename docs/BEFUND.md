@@ -2375,3 +2375,23 @@ Per Issue #34. Foundation für deterministische Bounty-Auswertung.
 Finalization-Journal, Bounty-Completion.
 
 **Tests:** 53 neue. Vollständige Suite: 404/404. Ruff/mypy/py_compile grün.
+---
+
+## §40 — External Bounty Lifecycle 02C (2026-07-21)
+
+Per Issue #116. Immutable FinalEvaluation und pure Decision-Aggregation.
+
+**FinalEvaluation (village/final_evaluation.py):**
+- `ReviewDecision`: ACCEPT, REJECT, INDETERMINATE.
+- `CriterionEvaluation` (frozen): criterion_id, definition_hash, EvalResult, reason_code.
+- `FinalEvaluation` (frozen, self-hashed): alle Submission-Bindings, Criterion-Ergebnisse,
+  overall_decision, reason_codes, evaluator_version, evaluated_at, evaluation_hash.
+- `build_final_evaluation(submission, contract)`: pure Aggregation. Validiert Bindings,
+  evaluiert jedes Kriterium, wendet Decision-Policy an.
+- INDETERMINATE precedence: INDETERMINATE outranks FAIL.
+- Kein I/O, keine State-Mutation, keine terminale Autorität.
+
+**Nicht implementiert:** automatisches Review, Anwendung von criterion.met,
+Finalization-Journal, Contract-Fulfillment, Bounty-Completion, Heartbeat-Aktivierung.
+
+**Tests:** 19 neue in `test_final_evaluation.py`. Vollständige Suite: 423/423.
