@@ -487,7 +487,7 @@ def _parse_contract_terms(terms: dict[str, Any]) -> tuple[list[str], Budget, "da
     budget = Budget.from_dict(terms["budget"]) if terms.get("budget") else Budget()
     deadline_raw = terms.get("deadline")
     deadline = datetime.fromisoformat(deadline_raw) if deadline_raw else None
-    success_criteria = [SuccessCriterion.from_dict(c) for c in terms.get("success_criteria", [])]
+    success_criteria = [SuccessCriterion.from_untrusted_terms(c) for c in terms.get("success_criteria", [])]
     return allowed_resources, budget, deadline, success_criteria
 
 

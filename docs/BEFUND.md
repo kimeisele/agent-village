@@ -2351,3 +2351,27 @@ Per Issue #27. Read-only Recon — keine Evaluator-Implementierung.
 - Alle vorherigen Korrekturen (immutable FinalEvaluation, criterion_id/
   definition_hash, Policy-Authority-Invariant, Parameter-Bounds,
   GitHub-Downstream-Delivery) bleiben unverändert.
+
+---
+
+## §39 — External Bounty Lifecycle 02B (2026-07-21, dritte Korrektur)
+
+Per Issue #34. Foundation für deterministische Bounty-Auswertung.
+
+**Datenmodell (dritte Korrektur):**
+- `SuccessCriterion.create()`: trusted creation factory. Validiert Config via
+  shared Validator, generiert System-ID, computed Definition-Hash, `met=None`.
+- `__post_init__` erzwingt: Evaluator-tragende Kriterien MÜSSEN ID + Hash haben.
+  Unique IDs in `VillageContract.__post_init__` + `from_dict`.
+- Shared `validate_evaluator_config()` in contracts.py — genutzt von
+  `from_untrusted_terms`, `from_persisted_dict`, `evaluate_criterion`.
+- Legacy-Kriterien: `criterion_id=""`, `criterion_definition_hash=""`.
+  Stabil über Loads, nie UUID-Generierung während Read.
+- `validate_submission_bindings()`: total (nie raise), erkennt
+  legacy_unbound_criterion, invalid_criterion_id/hash, output_not_canonical,
+  policy_not_canonical.
+
+**Nicht implementiert:** automatisches Review, FinalEvaluation,
+Finalization-Journal, Bounty-Completion.
+
+**Tests:** 53 neue. Vollständige Suite: 404/404. Ruff/mypy/py_compile grün.
