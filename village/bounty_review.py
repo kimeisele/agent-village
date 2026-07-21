@@ -108,40 +108,6 @@ def validate_submission_bindings(submission: dict[str, Any], contract: VillageCo
         reasons.append("policy_not_canonical")
     return reasons
 
-    cids = submission.get("criterion_ids")
-    chashes = submission.get("criterion_definition_hashes")
-    if not isinstance(cids, list) or not isinstance(chashes, list):
-        reasons.append("missing_or_invalid:criterion_ids_or_hashes")
-        return reasons
-    if len(cids) != len(chashes):
-        reasons.append("criterion_id_hash_count_mismatch")
-        return reasons
-
-    if submission["contract_id"] != contract.contract_id:
-        reasons.append("contract_id_mismatch")
-    if submission["contract_version"] != contract.version:
-        reasons.append("contract_version_mismatch")
-    expected_cids = [c.criterion_id for c in contract.success_criteria]
-    if cids != expected_cids:
-        reasons.append("criterion_ids_mismatch")
-    expected_hashes = [c.criterion_definition_hash for c in contract.success_criteria]
-    if chashes != expected_hashes:
-        reasons.append("criterion_definition_hashes_mismatch")
-
-    stored_output = submission.get("output")
-    if isinstance(stored_output, dict):
-        computed = hashlib.sha256(canonical_json_dumps(stored_output).encode()).hexdigest()
-        if computed != submission.get("output_canonical_hash"):
-            reasons.append("output_hash_mismatch")
-    else:
-        reasons.append("output_hash_missing_or_invalid")
-
-    expected_policy = compute_review_policy_hash(contract)
-    if submission.get("review_policy_hash") != expected_policy:
-        reasons.append("review_policy_hash_mismatch")
-
-    return reasons
-
 
 # NOTE: `heartbeat.BOUNTIES` is accessed via qualified attribute lookup
 # throughout this module, deliberately NOT `from village.heartbeat import
