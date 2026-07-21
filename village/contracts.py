@@ -177,16 +177,16 @@ def compute_criterion_definition_hash(evaluator: EvaluatorType | None, params: d
     return hashlib.sha256(canonical_json_dumps(projection).encode()).hexdigest()
 
 
-_MAX_FIELD_LEN = 128
-_MAX_SEGMENTS = 4
-_MAX_SEGMENT_LEN = 32
-_MAX_VALUE_STRLEN = 256
-_MAX_MIN_COUNT = 1_000_000
+MAX_FIELD_LEN = 128
+MAX_SEGMENTS = 4
+MAX_SEGMENT_LEN = 32
+MAX_VALUE_STRLEN = 256
+MAX_MIN_COUNT = 1_000_000
 
-_FIELD_SEGMENT_RE = _re.compile(r"^[a-zA-Z0-9_]+$")
+FIELD_SEGMENT_RE = _re.compile(r"^[a-zA-Z0-9_]+$")
 
 
-def _validate_evaluator_config(evaluator: EvaluatorType, params: dict[str, Any]) -> None:
+def validate_evaluator_config(evaluator: EvaluatorType, params: dict[str, Any]) -> None:
     """Validate evaluator configuration against the Issue #34 schemas.
 
     Raises ValueError for any violation. Used by both from_untrusted_terms
@@ -200,7 +200,7 @@ def _validate_evaluator_config(evaluator: EvaluatorType, params: dict[str, Any])
         field = params.get("field")
         if not isinstance(field, str):
             raise ValueError("FIELD_PRESENT: field must be a string")
-        _validate_field_path(field)
+        validate_field_path(field)
 
     elif evaluator == EvaluatorType.FIELD_VALUE:
         allowed = {"field", "value"}
@@ -210,13 +210,13 @@ def _validate_evaluator_config(evaluator: EvaluatorType, params: dict[str, Any])
         field = params.get("field")
         if not isinstance(field, str):
             raise ValueError("FIELD_VALUE: field must be a string")
-        _validate_field_path(field)
+        validate_field_path(field)
         value = params.get("value")
         if value is None:
             raise ValueError("FIELD_VALUE: value is required")
         if isinstance(value, str):
-            if len(value) > _MAX_VALUE_STRLEN:
-                raise ValueError(f"FIELD_VALUE: string value too long ({len(value)} > {_MAX_VALUE_STRLEN})")
+            if len(value) > MAX_VALUE_STRLEN:
+                raise ValueError(f"FIELD_VALUE: string value too long ({len(value)} > {MAX_VALUE_STRLEN})")
         elif isinstance(value, bool):
             pass  # strict bool
         elif isinstance(value, (int, float)):
@@ -235,28 +235,28 @@ def _validate_evaluator_config(evaluator: EvaluatorType, params: dict[str, Any])
         field = params.get("field")
         if not isinstance(field, str):
             raise ValueError("FIELD_COUNT: field must be a string")
-        _validate_field_path(field)
+        validate_field_path(field)
         min_count = params.get("min_count")
         if isinstance(min_count, bool) or not isinstance(min_count, int):
             raise ValueError("FIELD_COUNT: min_count must be a strict integer")
-        if min_count < 0 or min_count > _MAX_MIN_COUNT:
+        if min_count < 0 or min_count > MAX_MIN_COUNT:
             raise ValueError(f"FIELD_COUNT: min_count out of range ({min_count})")
 
     else:
         raise ValueError(f"unknown evaluator type: {evaluator!r}")
 
 
-def _validate_field_path(field: str) -> None:
+def validate_field_path(field: str) -> None:
     """Validate a dotted field path. Raises ValueError on violation."""
-    if not field or len(field) > _MAX_FIELD_LEN:
+    if not field or len(field) > MAX_FIELD_LEN:
         raise ValueError(f"field path too long ({len(field)})")
     segments = field.split(".")
-    if len(segments) > _MAX_SEGMENTS:
+    if len(segments) > MAX_SEGMENTS:
         raise ValueError(f"too many path segments ({len(segments)})")
     for seg in segments:
-        if not seg or len(seg) > _MAX_SEGMENT_LEN:
+        if not seg or len(seg) > MAX_SEGMENT_LEN:
             raise ValueError("path segment too long")
-        if not _FIELD_SEGMENT_RE.match(seg):
+        if not FIELD_SEGMENT_RE.match(seg):
             raise ValueError(f"invalid path segment characters: {seg!r}")
 
 
@@ -309,9 +309,49 @@ class SuccessCriterion:
     def __post_init__(self) -> None:
         if not 0.0 <= self.weight <= 1.0:
             raise ValueError(f"weight must be in [0, 1], got {self.weight}")
+        # Enforce ID invariant: evaluator-bearing criteria must have ID + hash
+        has_evaluator = self.evaluator is not None
+        has_id = bool(self.criterion_id)
+        has_hash = bool(self.criterion_definition_hash)
+        if has_evaluator and (not has_id or not has_hash):
+            raise ValueError("evaluator-bearing criterion must have criterion_id and criterion_definition_hash")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @classmethod
+    def create(
+        cls,
+        name: str,
+        *,
+        description: str = "",
+        required: bool = False,
+        weight: float = 1.0,
+        evaluator: EvaluatorType | None = None,
+        evaluator_params: dict[str, Any] | None = None,
+    ) -> "SuccessCriterion":
+        """Trusted creation factory for new canonical criteria.
+
+        Validates evaluator configuration via the shared validator,
+        generates a system-controlled criterion ID, computes the
+        definition hash, and initializes met=None.
+        """
+        params = dict(evaluator_params) if evaluator_params else {}
+        if evaluator is not None:
+            validate_evaluator_config(evaluator, params)
+        criterion_id = hashlib.sha256(f"{name}:{uuid.uuid4()}".encode()).hexdigest()[:16]
+        definition_hash = compute_criterion_definition_hash(evaluator, params)
+        return cls(
+            criterion_id=criterion_id,
+            criterion_definition_hash=definition_hash,
+            name=name,
+            description=description,
+            required=required,
+            weight=weight,
+            met=None,
+            evaluator=evaluator,
+            evaluator_params=params,
+        )
 
     @classmethod
     def from_untrusted_terms(cls, d: dict[str, Any]) -> "SuccessCriterion":
@@ -334,7 +374,7 @@ class SuccessCriterion:
                 evaluator = EvaluatorType(evaluator_raw)
             except ValueError:
                 raise ValueError(f"unknown evaluator type: {evaluator_raw!r}")
-            _validate_evaluator_config(evaluator, params)
+            validate_evaluator_config(evaluator, params)
             known["evaluator"] = evaluator
             known["evaluator_params"] = params
         else:
@@ -391,6 +431,11 @@ class SuccessCriterion:
         # Legacy: no ID → keep empty, never mint during read
         if not has_id:
             known["criterion_id"] = ""
+        else:
+            # New-schema with evaluator: validate config via shared validator
+            # even when the stored hash matches (defense in depth)
+            if known.get("evaluator") is not None:
+                validate_evaluator_config(known["evaluator"], params)
 
         computed_hash = compute_criterion_definition_hash(known.get("evaluator"), params)
         if has_hash and stored_hash != computed_hash:
@@ -432,6 +477,13 @@ class VillageContract:
     def __post_init__(self) -> None:
         self.deadline = normalize_datetime(self.deadline)
         self.created_at = normalize_datetime(self.created_at) or _now()
+        # Enforce unique non-empty criterion IDs
+        seen_ids: set[str] = set()
+        for c in self.success_criteria:
+            if c.criterion_id:
+                if c.criterion_id in seen_ids:
+                    raise ValueError(f"duplicate criterion_id in contract: {c.criterion_id!r}")
+                seen_ids.add(c.criterion_id)
 
     # ── Resource whitelist ────────────────────────────────────────
     def is_resource_permitted(self, resource: str) -> bool:

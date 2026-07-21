@@ -2354,32 +2354,24 @@ Per Issue #27. Read-only Recon — keine Evaluator-Implementierung.
 
 ---
 
-## §39 — External Bounty Lifecycle 02B (2026-07-20, zweite Korrektur)
+## §39 — External Bounty Lifecycle 02B (2026-07-21, dritte Korrektur)
 
 Per Issue #34. Foundation für deterministische Bounty-Auswertung.
 
-**Datenmodell (zweite Korrektur nach Review):**
-- Getrennte Factory-Methoden: `from_untrusted_terms()` (extern, ignoriert IDs,
-  setzt immer `met=None`), `from_persisted_dict()` (kanonisch, bewahrt IDs).
-- Legacy-Kriterien ohne ID: `criterion_id=""`, `criterion_definition_hash=""`.
-  Stabil über wiederholte Loads, nie UUID-Generierung während Read.
-- Partially-bound Identity (ID ohne Hash oder umgekehrt) → ValueError.
-- `_validate_evaluator_config()` als shared Validator für beide Pfade.
-- Unique criterion IDs innerhalb eines Contracts (Duplicate → ValueError).
-- `auto_review_enabled` in to_dict/from_dict/known_fields; fehlend→False;
-  malformed→ValueError; extern nicht setzbar.
-
-**Submission-Bindings:**
-- 10 Felder: submission_id, bounty_id, contract_id, contract_version,
-  work_result_id, execution_id, output_canonical_hash, review_policy_hash,
-  criterion_ids, criterion_definition_hashes.
-- `validate_submission_bindings()`: pure, non-mutating, typed reason codes.
-
-**Evaluator:** `isinstance(output, dict)` + `isinstance(params, dict)` Guards.
-Unknown/Corrupt in Persistenz → non-automatable.
+**Datenmodell (dritte Korrektur):**
+- `SuccessCriterion.create()`: trusted creation factory. Validiert Config via
+  shared Validator, generiert System-ID, computed Definition-Hash, `met=None`.
+- `__post_init__` erzwingt: Evaluator-tragende Kriterien MÜSSEN ID + Hash haben.
+  Unique IDs in `VillageContract.__post_init__` + `from_dict`.
+- Shared `validate_evaluator_config()` in contracts.py — genutzt von
+  `from_untrusted_terms`, `from_persisted_dict`, `evaluate_criterion`.
+- Legacy-Kriterien: `criterion_id=""`, `criterion_definition_hash=""`.
+  Stabil über Loads, nie UUID-Generierung während Read.
+- `validate_submission_bindings()`: total (nie raise), erkennt
+  legacy_unbound_criterion, invalid_criterion_id/hash, output_not_canonical,
+  policy_not_canonical.
 
 **Nicht implementiert:** automatisches Review, FinalEvaluation,
 Finalization-Journal, Bounty-Completion.
 
-**Tests:** 46 neue (identity, legacy, bindings, auto_review, canonical-json,
-policy-hash). Vollständige Suite: 397/397. Ruff/mypy/py_compile grün.
+**Tests:** 53 neue. Vollständige Suite: 404/404. Ruff/mypy/py_compile grün.

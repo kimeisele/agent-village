@@ -20,19 +20,25 @@ from village.evaluator import EvalResult, evaluate_criterion
 
 class TestFieldPresent:
     def test_pass_when_key_exists_and_value_not_none(self):
-        c = SuccessCriterion(name="test", evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "gaps"})
+        c = SuccessCriterion.create(
+            name="test", evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "gaps"}
+        )
         assert evaluate_criterion(c, {"gaps": []}) == EvalResult.PASS
 
     def test_fail_when_key_exists_but_value_is_none(self):
-        c = SuccessCriterion(name="test", evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "gaps"})
+        c = SuccessCriterion.create(
+            name="test", evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "gaps"}
+        )
         assert evaluate_criterion(c, {"gaps": None}) == EvalResult.FAIL
 
     def test_indeterminate_when_key_missing(self):
-        c = SuccessCriterion(name="test", evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "missing"})
+        c = SuccessCriterion.create(
+            name="test", evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "missing"}
+        )
         assert evaluate_criterion(c, {"gaps": []}) == EvalResult.INDETERMINATE
 
     def test_nested_dict_path(self):
-        c = SuccessCriterion(
+        c = SuccessCriterion.create(
             name="test",
             evaluator=EvaluatorType.FIELD_PRESENT,
             evaluator_params={"field": "result.summary"},
@@ -40,7 +46,7 @@ class TestFieldPresent:
         assert evaluate_criterion(c, {"result": {"summary": "ok"}}) == EvalResult.PASS
 
     def test_intermediate_not_dict(self):
-        c = SuccessCriterion(
+        c = SuccessCriterion.create(
             name="test",
             evaluator=EvaluatorType.FIELD_PRESENT,
             evaluator_params={"field": "result.summary"},
@@ -53,7 +59,7 @@ class TestFieldPresent:
 
 class TestFieldValue:
     def test_pass_exact_string_match(self):
-        c = SuccessCriterion(
+        c = SuccessCriterion.create(
             name="test",
             evaluator=EvaluatorType.FIELD_VALUE,
             evaluator_params={"field": "status", "value": "ok"},
@@ -61,7 +67,7 @@ class TestFieldValue:
         assert evaluate_criterion(c, {"status": "ok"}) == EvalResult.PASS
 
     def test_fail_string_mismatch(self):
-        c = SuccessCriterion(
+        c = SuccessCriterion.create(
             name="test",
             evaluator=EvaluatorType.FIELD_VALUE,
             evaluator_params={"field": "status", "value": "ok"},
@@ -69,7 +75,7 @@ class TestFieldValue:
         assert evaluate_criterion(c, {"status": "error"}) == EvalResult.FAIL
 
     def test_indeterminate_type_mismatch(self):
-        c = SuccessCriterion(
+        c = SuccessCriterion.create(
             name="test",
             evaluator=EvaluatorType.FIELD_VALUE,
             evaluator_params={"field": "status", "value": "ok"},
@@ -77,7 +83,7 @@ class TestFieldValue:
         assert evaluate_criterion(c, {"status": 42}) == EvalResult.INDETERMINATE
 
     def test_bool_not_equal_to_int(self):
-        c = SuccessCriterion(
+        c = SuccessCriterion.create(
             name="test",
             evaluator=EvaluatorType.FIELD_VALUE,
             evaluator_params={"field": "flag", "value": True},
@@ -85,7 +91,7 @@ class TestFieldValue:
         assert evaluate_criterion(c, {"flag": 1}) == EvalResult.INDETERMINATE
 
     def test_indeterminate_missing_key(self):
-        c = SuccessCriterion(
+        c = SuccessCriterion.create(
             name="test",
             evaluator=EvaluatorType.FIELD_VALUE,
             evaluator_params={"field": "x", "value": 1},
@@ -98,7 +104,7 @@ class TestFieldValue:
 
 class TestFieldCount:
     def test_pass_meets_min_count(self):
-        c = SuccessCriterion(
+        c = SuccessCriterion.create(
             name="test",
             evaluator=EvaluatorType.FIELD_COUNT,
             evaluator_params={"field": "gaps", "min_count": 1},
@@ -106,7 +112,7 @@ class TestFieldCount:
         assert evaluate_criterion(c, {"gaps": [1, 2]}) == EvalResult.PASS
 
     def test_fail_below_min_count(self):
-        c = SuccessCriterion(
+        c = SuccessCriterion.create(
             name="test",
             evaluator=EvaluatorType.FIELD_COUNT,
             evaluator_params={"field": "gaps", "min_count": 1},
@@ -114,7 +120,7 @@ class TestFieldCount:
         assert evaluate_criterion(c, {"gaps": []}) == EvalResult.FAIL
 
     def test_indeterminate_not_a_list(self):
-        c = SuccessCriterion(
+        c = SuccessCriterion.create(
             name="test",
             evaluator=EvaluatorType.FIELD_COUNT,
             evaluator_params={"field": "gaps", "min_count": 1},
@@ -122,7 +128,7 @@ class TestFieldCount:
         assert evaluate_criterion(c, {"gaps": "not_a_list"}) == EvalResult.INDETERMINATE
 
     def test_indeterminate_missing_key(self):
-        c = SuccessCriterion(
+        c = SuccessCriterion.create(
             name="test",
             evaluator=EvaluatorType.FIELD_COUNT,
             evaluator_params={"field": "gaps", "min_count": 1},
@@ -130,11 +136,10 @@ class TestFieldCount:
         assert evaluate_criterion(c, {}) == EvalResult.INDETERMINATE
 
     def test_bool_not_accepted_as_min_count(self):
-        c = SuccessCriterion(
-            name="test",
-            evaluator=EvaluatorType.FIELD_COUNT,
-            evaluator_params={"field": "gaps", "min_count": True},  # bool, not int
+        c = SuccessCriterion.create(
+            name="test", evaluator=EvaluatorType.FIELD_COUNT, evaluator_params={"field": "gaps", "min_count": 1}
         )
+        c.evaluator_params["min_count"] = True  # mutate to bool for test
         assert evaluate_criterion(c, {"gaps": [1]}) == EvalResult.INDETERMINATE
 
 
@@ -143,49 +148,35 @@ class TestFieldCount:
 
 class TestEvaluatorPurity:
     def test_unknown_evaluator_type_indeterminate(self):
-        c = SuccessCriterion(name="test", evaluator_params={"field": "x"})
-        c.evaluator = None  # explicitly None
+        c = SuccessCriterion.create(name="test")  # explicitly None
         assert evaluate_criterion(c, {"x": 1}) == EvalResult.INDETERMINATE
 
     def test_malformed_params_indeterminate(self):
-        c = SuccessCriterion(
-            name="test",
-            evaluator=EvaluatorType.FIELD_PRESENT,
-            evaluator_params={"field": 123},  # not a string
+        c = SuccessCriterion.create(
+            name="test", evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "gaps"}
         )
+        c.evaluator_params["field"] = 123  # mutate to int for test
         assert evaluate_criterion(c, {"x": 1}) == EvalResult.INDETERMINATE
 
     def test_unknown_param_keys_indeterminate(self):
-        c = SuccessCriterion(
-            name="test",
-            evaluator=EvaluatorType.FIELD_PRESENT,
-            evaluator_params={"field": "x", "unknown_extra": True},
-        )
+        c = SuccessCriterion.create(name="test", evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "x"})
+        c.evaluator_params["unknown_extra"] = True  # mutate for test
         # Unknown keys → INDETERMINATE
         assert evaluate_criterion(c, {"x": 1}) == EvalResult.INDETERMINATE
 
     def test_field_path_too_long(self):
-        c = SuccessCriterion(
-            name="test",
-            evaluator=EvaluatorType.FIELD_PRESENT,
-            evaluator_params={"field": "a" * 129},
-        )
+        c = SuccessCriterion.create(name="test", evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "x"})
+        c.evaluator_params["field"] = "a" * 129  # mutate for test
         assert evaluate_criterion(c, {}) == EvalResult.INDETERMINATE
 
     def test_field_path_too_many_segments(self):
-        c = SuccessCriterion(
-            name="test",
-            evaluator=EvaluatorType.FIELD_PRESENT,
-            evaluator_params={"field": "a.b.c.d.e"},
-        )
+        c = SuccessCriterion.create(name="test", evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "x"})
+        c.evaluator_params["field"] = "a.b.c.d.e"  # mutate for test
         assert evaluate_criterion(c, {}) == EvalResult.INDETERMINATE
 
     def test_field_segment_invalid_chars(self):
-        c = SuccessCriterion(
-            name="test",
-            evaluator=EvaluatorType.FIELD_PRESENT,
-            evaluator_params={"field": "hello*world"},
-        )
+        c = SuccessCriterion.create(name="test", evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "x"})
+        c.evaluator_params["field"] = "hello*world"  # mutate for test
         assert evaluate_criterion(c, {}) == EvalResult.INDETERMINATE
 
 
@@ -237,7 +228,7 @@ class TestEvaluatorDoesNotMutate:
     def test_output_dict_unchanged_after_evaluation(self):
         output = {"gaps": [1, 2, 3]}
         original = dict(output)
-        c = SuccessCriterion(
+        c = SuccessCriterion.create(
             name="test",
             evaluator=EvaluatorType.FIELD_COUNT,
             evaluator_params={"field": "gaps", "min_count": 1},
@@ -246,7 +237,7 @@ class TestEvaluatorDoesNotMutate:
         assert output == original
 
     def test_criterion_met_unchanged_after_evaluation(self):
-        c = SuccessCriterion(
+        c = SuccessCriterion.create(
             name="test",
             evaluator=EvaluatorType.FIELD_PRESENT,
             evaluator_params={"field": "gaps"},
@@ -399,3 +390,117 @@ class TestPolicyHash:
         h1 = compute_review_policy_hash(a)
         a.title = "new title"
         assert compute_review_policy_hash(a) == h1
+
+
+# ── Direct-construction ID enforcement ───────────────────────
+
+
+class TestDirectConstructionIdEnforcement:
+    def test_evaluator_without_id_raises(self):
+        with pytest.raises(ValueError, match="evaluator-bearing"):
+            SuccessCriterion(
+                criterion_id="",
+                name="test",
+                evaluator=EvaluatorType.FIELD_PRESENT,
+                evaluator_params={"field": "x"},
+            )
+
+    def test_duplicate_ids_in_village_contract_raises(self):
+        c1 = SuccessCriterion.create(name="a", evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "x"})
+        cid = c1.criterion_id
+        c2 = SuccessCriterion.create(name="b", evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "y"})
+        # Force duplicate ID
+        c2.criterion_id = cid
+        with pytest.raises(ValueError, match="duplicate criterion_id"):
+            VillageContract(contract_id="c:1", success_criteria=[c1, c2])
+
+    def test_trusted_create_always_produces_id(self):
+        c = SuccessCriterion.create(name="test", evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "x"})
+        assert c.criterion_id
+        assert c.criterion_definition_hash
+        assert c.met is None
+
+
+# ── Binding validator regression ─────────────────────────────
+
+
+class TestBindingValidatorRegression:
+    def test_legacy_unbound_criterion_fails(self):
+        from village.bounty_review import validate_submission_bindings
+
+        c = VillageContract(contract_id="c:1", success_criteria=[SuccessCriterion(name="legacy")])
+        sub = {
+            "submission_id": "s:1",
+            "bounty_id": "b:1",
+            "contract_id": "c:1",
+            "contract_version": "1.0",
+            "work_result_id": "w:1",
+            "execution_id": "e:1",
+            "output_canonical_hash": "x" * 64,
+            "review_policy_hash": "y" * 64,
+            "criterion_ids": [],
+            "criterion_definition_hashes": [],
+            "output": {},
+        }
+        reasons = validate_submission_bindings(sub, c)
+        assert "legacy_unbound_criterion" in reasons
+
+    def test_invalid_criterion_id_format_fails(self):
+        from village.bounty_review import validate_submission_bindings
+
+        c = VillageContract(contract_id="c:1")
+        sub = {
+            "submission_id": "s:1",
+            "bounty_id": "b:1",
+            "contract_id": "c:1",
+            "contract_version": "1.0",
+            "work_result_id": "w:1",
+            "execution_id": "e:1",
+            "output_canonical_hash": "x" * 64,
+            "review_policy_hash": "y" * 64,
+            "criterion_ids": [""],
+            "criterion_definition_hashes": ["a" * 64],
+            "output": {},
+        }
+        reasons = validate_submission_bindings(sub, c)
+        assert any("invalid_criterion_id" in r for r in reasons)
+
+    def test_non_hex_hash_format_fails(self):
+        from village.bounty_review import validate_submission_bindings
+
+        c = VillageContract(contract_id="c:1")
+        sub = {
+            "submission_id": "s:1",
+            "bounty_id": "b:1",
+            "contract_id": "c:1",
+            "contract_version": "1.0",
+            "work_result_id": "w:1",
+            "execution_id": "e:1",
+            "output_canonical_hash": "x" * 64,
+            "review_policy_hash": "y" * 64,
+            "criterion_ids": ["a" * 16],
+            "criterion_definition_hashes": ["g" * 64],
+            "output": {},
+        }
+        reasons = validate_submission_bindings(sub, c)
+        assert any("invalid_criterion_definition_hash" in r for r in reasons)
+
+    def test_output_not_canonical_graceful(self):
+        from village.bounty_review import validate_submission_bindings
+
+        c = VillageContract(contract_id="c:1")
+        sub = {
+            "submission_id": "s:1",
+            "bounty_id": "b:1",
+            "contract_id": "c:1",
+            "contract_version": "1.0",
+            "work_result_id": "w:1",
+            "execution_id": "e:1",
+            "output_canonical_hash": "x" * 64,
+            "review_policy_hash": "y" * 64,
+            "criterion_ids": [],
+            "criterion_definition_hashes": [],
+            "output": {"bad": float("nan")},
+        }
+        reasons = validate_submission_bindings(sub, c)
+        assert "output_not_canonical" in reasons
