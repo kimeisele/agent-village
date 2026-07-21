@@ -2375,3 +2375,40 @@ Per Issue #34. Foundation für deterministische Bounty-Auswertung.
 Finalization-Journal, Bounty-Completion.
 
 **Tests:** 53 neue. Vollständige Suite: 404/404. Ruff/mypy/py_compile grün.
+---
+
+## §40 — External Bounty Lifecycle 02C (2026-07-21)
+
+Per Issue #116. Immutable FinalEvaluation und pure Decision-Aggregation.
+
+**Architektur:**
+- `village/submission_bindings.py`: neutrales Modul (kein Terminal/Heartbeat/
+  Review-Authority-Import). Wird von `final_evaluation.py` und `bounty_review.py`
+  importiert.
+- `FinalEvaluation` (frozen, self-hashed): alle Submission-Bindings,
+  `CriterionEvaluation` pro Kriterium, `overall_decision`, `reason_codes`,
+  `evaluator_version`, `evaluated_at`, `evaluation_hash`.
+- `FinalEvaluation.create()`: trusted creation — validiert reason-code Syntax,
+  finite evaluated_at, evaluator_version, computed Hash.
+- `FinalEvaluation.from_persisted_dict()`: fail-closed Loading — validiert
+  Types, Enums, finite evaluated_at, reason-code Syntax, recomputed Hash,
+  reject on Mismatch. Bewahrt validierte Reason-Codes in Original-Reihenfolge.
+- `build_final_evaluation()`: pure Aggregation. Validiert Bindings via
+  `validate_submission_bindings()`, evaluiert jedes Kriterium, wendet
+  Decision-Policy an. Vollständige Criterion-Coverage für ALLE Outcomes
+  (auch INDETERMINATE-Pfade).
+- `validate_final_evaluation()`: total structural validator — `getattr`
+  Guards + `try/except`, nie raise. Prüft alle Identity-Felder,
+  Bindings (work_result_id, execution_id, output_canonical_hash,
+  review_policy_hash vs submission + contract), Reason-Code-Syntax,
+  Criterion-Ordnung, Decision-Consistency.
+- `_validate_reason_code_syntax()`: ASCII-Allowlist `[a-zA-Z0-9_:.=-]+`,
+  nonempty, max 128 chars.
+- INDETERMINATE outranks FAIL.
+
+**Nicht implementiert:** automatisches Review, Anwendung von criterion.met,
+Finalization-Journal, Contract-Fulfillment, Bounty-Completion/Rejection,
+Heartbeat-Aktivierung, GitHub-Verdict-Delivery.
+
+**Tests:** 45 neue in `test_final_evaluation.py`. Suite: 449/449.
+Ruff/mypy/py_compile grün.
