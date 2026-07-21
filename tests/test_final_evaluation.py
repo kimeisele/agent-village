@@ -509,3 +509,118 @@ class TestTrustedCreationValidation:
                 evaluator_version=EVALUATOR_VERSION,
                 evaluated_at=1.0,
             )
+
+
+# ── Total structural validator (malformed objects) ───────────
+
+
+class TestValidatorTotal:
+    def test_never_raises_on_malformed_object(self):
+        from dataclasses import dataclass
+
+        @dataclass
+        class BadEval:
+            submission_id = None
+            bounty_id = None
+            contract_id = None
+            contract_version = None
+            work_result_id = None
+            execution_id = None
+            output_canonical_hash = None
+            review_policy_hash = None
+            criteria_results = None
+            overall_decision = None
+            reason_codes = None
+            evaluator_version = None
+            evaluated_at = None
+            evaluation_hash = None
+
+        contract = _make_contract()
+        sub = _make_submission(contract)
+        bad = BadEval()
+        reasons = validate_final_evaluation(bad, sub, contract)
+        assert len(reasons) > 0
+
+    def test_nan_evaluated_at_returns_reason(self):
+        contract = _make_contract()
+        sub = _make_submission(contract)
+        fe = FinalEvaluation(
+            submission_id="s",
+            bounty_id="b",
+            contract_id="c",
+            contract_version="1.0",
+            work_result_id="w",
+            execution_id="e",
+            output_canonical_hash="o" * 64,
+            review_policy_hash="r" * 64,
+            criteria_results=(),
+            overall_decision=ReviewDecision.INDETERMINATE,
+            reason_codes=("test:code",),
+            evaluator_version=EVALUATOR_VERSION,
+            evaluated_at=float("nan"),
+        )
+        reasons = validate_final_evaluation(fe, sub, contract)
+        assert any("malformed_evaluated_at" in r for r in reasons)
+
+    def test_none_criteria_results_returns_reason(self):
+        contract = _make_contract()
+        sub = _make_submission(contract)
+        fe = FinalEvaluation(
+            submission_id="s",
+            bounty_id="b",
+            contract_id="c",
+            contract_version="1.0",
+            work_result_id="w",
+            execution_id="e",
+            output_canonical_hash="o" * 64,
+            review_policy_hash="r" * 64,
+            criteria_results=None,
+            overall_decision=ReviewDecision.INDETERMINATE,
+            reason_codes=("test:code",),
+            evaluator_version=EVALUATOR_VERSION,
+            evaluated_at=1.0,
+        )
+        reasons = validate_final_evaluation(fe, sub, contract)
+        assert any("malformed_criteria_results" in r for r in reasons)
+
+    def test_none_reason_codes_returns_reason(self):
+        contract = _make_contract()
+        sub = _make_submission(contract)
+        fe = FinalEvaluation(
+            submission_id="s",
+            bounty_id="b",
+            contract_id="c",
+            contract_version="1.0",
+            work_result_id="w",
+            execution_id="e",
+            output_canonical_hash="o" * 64,
+            review_policy_hash="r" * 64,
+            criteria_results=(),
+            overall_decision=ReviewDecision.INDETERMINATE,
+            reason_codes=None,
+            evaluator_version=EVALUATOR_VERSION,
+            evaluated_at=1.0,
+        )
+        reasons = validate_final_evaluation(fe, sub, contract)
+        assert any("malformed_reason_codes" in r for r in reasons)
+
+    def test_none_evaluator_version_returns_reason(self):
+        contract = _make_contract()
+        sub = _make_submission(contract)
+        fe = FinalEvaluation(
+            submission_id="s",
+            bounty_id="b",
+            contract_id="c",
+            contract_version="1.0",
+            work_result_id="w",
+            execution_id="e",
+            output_canonical_hash="o" * 64,
+            review_policy_hash="r" * 64,
+            criteria_results=(),
+            overall_decision=ReviewDecision.INDETERMINATE,
+            reason_codes=("test:code",),
+            evaluator_version=None,
+            evaluated_at=1.0,
+        )
+        reasons = validate_final_evaluation(fe, sub, contract)
+        assert any("malformed_evaluator_version" in r for r in reasons)

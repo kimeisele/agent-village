@@ -436,85 +436,142 @@ def validate_final_evaluation(
     submission: dict[str, Any],
     contract: VillageContract,
 ) -> list[str]:
-    """Pure structural validator. Returns reason codes, never raises."""
+    """Pure structural validator. Returns reason codes, never raises.
+    Safe against malformed runtime objects constructed outside trusted paths."""
     reasons: list[str] = []
-    if not verify_evaluation_hash(evaluation):
-        reasons.append("invalid_evaluation_hash")
-    if evaluation.submission_id != submission.get("submission_id"):
-        reasons.append("submission_id_mismatch")
-    if evaluation.bounty_id != submission.get("bounty_id"):
-        reasons.append("bounty_id_mismatch")
-    if evaluation.contract_id != contract.contract_id:
-        reasons.append("contract_id_mismatch")
-    if evaluation.contract_version != contract.version:
-        reasons.append("contract_version_mismatch")
-    if evaluation.work_result_id != submission.get("work_result_id"):
-        reasons.append("work_result_id_mismatch")
-    if evaluation.execution_id != submission.get("execution_id"):
-        reasons.append("execution_id_mismatch")
-    if evaluation.output_canonical_hash != submission.get("output_canonical_hash"):
-        reasons.append("output_canonical_hash_mismatch")
-    if evaluation.review_policy_hash != submission.get("review_policy_hash"):
-        reasons.append("review_policy_hash_mismatch")
     try:
-        expected_policy = compute_review_policy_hash(contract)
-        if evaluation.review_policy_hash != expected_policy:
-            reasons.append("review_policy_hash_mismatch_contract")
-    except (ValueError, TypeError):
-        reasons.append("review_policy_hash_not_canonical")
-    if evaluation.evaluator_version != EVALUATOR_VERSION:
-        reasons.append(f"unsupported_evaluator_version:{evaluation.evaluator_version[:32]}")
-
-    # Validate reason code syntax in both top-level and criterion results
-    for i, rc in enumerate(evaluation.reason_codes):
+        # Guard: malformed scalar identity fields
+        for f in (
+            "submission_id",
+            "bounty_id",
+            "contract_id",
+            "contract_version",
+            "work_result_id",
+            "execution_id",
+            "output_canonical_hash",
+            "review_policy_hash",
+        ):
+            val = getattr(evaluation, f, None)
+            if not isinstance(val, str):
+                reasons.append(f"malformed_evaluation:{f}")
+                return reasons
+        ev = getattr(evaluation, "evaluator_version", None)
+        if not isinstance(ev, str):
+            reasons.append("malformed_evaluator_version")
+        elif ev != EVALUATOR_VERSION:
+            reasons.append(f"unsupported_evaluator_version:{ev[:32]}")
+        ea = getattr(evaluation, "evaluated_at", None)
+        if not isinstance(ea, (int, float)) or math.isnan(ea) or math.isinf(ea):
+            reasons.append("malformed_evaluated_at")
+        od = getattr(evaluation, "overall_decision", None)
+        if not isinstance(od, ReviewDecision):
+            reasons.append("malformed_overall_decision")
+            return reasons
+        eh = getattr(evaluation, "evaluation_hash", "")
+        if not isinstance(eh, str):
+            reasons.append("malformed_evaluation_hash")
+            return reasons
         try:
-            _validate_reason_code_syntax(rc)
-        except ValueError:
-            reasons.append(f"invalid_reason_code:{i}")
-    for i, cr in enumerate(evaluation.criteria_results):
+            if not verify_evaluation_hash(evaluation):
+                reasons.append("invalid_evaluation_hash")
+        except Exception:
+            reasons.append("evaluation_hash_not_canonical")
+
+        if evaluation.submission_id != submission.get("submission_id"):
+            reasons.append("submission_id_mismatch")
+        if evaluation.bounty_id != submission.get("bounty_id"):
+            reasons.append("bounty_id_mismatch")
+        if evaluation.contract_id != contract.contract_id:
+            reasons.append("contract_id_mismatch")
+        if evaluation.contract_version != contract.version:
+            reasons.append("contract_version_mismatch")
+        if evaluation.work_result_id != submission.get("work_result_id"):
+            reasons.append("work_result_id_mismatch")
+        if evaluation.execution_id != submission.get("execution_id"):
+            reasons.append("execution_id_mismatch")
+        if evaluation.output_canonical_hash != submission.get("output_canonical_hash"):
+            reasons.append("output_canonical_hash_mismatch")
+        if evaluation.review_policy_hash != submission.get("review_policy_hash"):
+            reasons.append("review_policy_hash_mismatch")
         try:
-            _validate_reason_code_syntax(cr.reason_code)
-        except ValueError:
-            reasons.append(f"invalid_criterion_reason_code:{i}")
+            expected_policy = compute_review_policy_hash(contract)
+            if evaluation.review_policy_hash != expected_policy:
+                reasons.append("review_policy_hash_mismatch_contract")
+        except (ValueError, TypeError):
+            reasons.append("review_policy_hash_not_canonical")
 
-    seen: set[str] = set()
-    contract_ids = [c.criterion_id for c in contract.success_criteria]
-    for i, cr in enumerate(evaluation.criteria_results):
-        if cr.criterion_id in seen:
-            reasons.append(f"duplicate_criterion_id:{cr.criterion_id[:16]}")
-        seen.add(cr.criterion_id)
-        if i >= len(contract_ids) or cr.criterion_id != contract_ids[i]:
-            reasons.append("criterion_order_or_count_mismatch")
-            break
-        expected_ch = contract.success_criteria[i].criterion_definition_hash
-        if cr.criterion_definition_hash != expected_ch:
-            reasons.append(f"criterion_definition_hash_mismatch:{cr.criterion_id[:16]}")
+        rcs = getattr(evaluation, "reason_codes", None)
+        if not isinstance(rcs, (tuple, list)):
+            reasons.append("malformed_reason_codes")
+        else:
+            for i, rc in enumerate(rcs):
+                if not isinstance(rc, str):
+                    reasons.append(f"malformed_reason_code:{i}")
+                else:
+                    try:
+                        _validate_reason_code_syntax(rc)
+                    except ValueError:
+                        reasons.append(f"invalid_reason_code:{i}")
 
-    if len(evaluation.criteria_results) != len(contract.success_criteria):
-        reasons.append("criterion_count_mismatch")
+        crs = getattr(evaluation, "criteria_results", None)
+        if not isinstance(crs, (tuple, list)):
+            reasons.append("malformed_criteria_results")
+        else:
+            for i, cr in enumerate(crs):
+                if not isinstance(cr, CriterionEvaluation):
+                    reasons.append(f"malformed_criterion_result:{i}")
+                    continue
+                try:
+                    _validate_reason_code_syntax(cr.reason_code)
+                except ValueError:
+                    reasons.append(f"invalid_criterion_reason_code:{i}")
 
-    # Decision consistency: recompute and compare
-    has_indeterminate = False
-    has_fail = False
-    has_required_machine = False
-    for c in contract.success_criteria:
-        if c.required and c.evaluator is not None:
-            has_required_machine = True
-    for cr in evaluation.criteria_results:
-        if _criterion_is_required(contract, cr.criterion_id):
-            if cr.result == EvalResult.INDETERMINATE:
-                has_indeterminate = True
-            elif cr.result == EvalResult.FAIL:
-                has_fail = True
-    if not contract.auto_review_enabled or not has_required_machine:
-        expected = ReviewDecision.INDETERMINATE
-    elif has_indeterminate:
-        expected = ReviewDecision.INDETERMINATE
-    elif has_fail:
-        expected = ReviewDecision.REJECT
-    else:
-        expected = ReviewDecision.ACCEPT
-    if evaluation.overall_decision != expected:
-        reasons.append(f"decision_inconsistent: got={evaluation.overall_decision.value} expected={expected.value}")
+            seen: set[str] = set()
+            contract_ids = [c.criterion_id for c in contract.success_criteria]
+            for i, cr in enumerate(crs):
+                if not isinstance(cr, CriterionEvaluation):
+                    continue
+                if cr.criterion_id in seen:
+                    reasons.append(f"duplicate_criterion_id:{cr.criterion_id[:16]}")
+                seen.add(cr.criterion_id)
+                if i >= len(contract_ids) or cr.criterion_id != contract_ids[i]:
+                    reasons.append("criterion_order_or_count_mismatch")
+                    break
+                if i < len(contract.success_criteria):
+                    expected_ch = contract.success_criteria[i].criterion_definition_hash
+                    if cr.criterion_definition_hash != expected_ch:
+                        reasons.append(f"criterion_definition_hash_mismatch:{cr.criterion_id[:16]}")
+
+            valid_count = len([c for c in crs if isinstance(c, CriterionEvaluation)])
+            if valid_count != len(contract.success_criteria):
+                reasons.append("criterion_count_mismatch")
+
+            has_indeterminate = False
+            has_fail = False
+            has_required_machine = False
+            for c in contract.success_criteria:
+                if c.required and c.evaluator is not None:
+                    has_required_machine = True
+            for cr in crs:
+                if not isinstance(cr, CriterionEvaluation):
+                    continue
+                if _criterion_is_required(contract, cr.criterion_id):
+                    if cr.result == EvalResult.INDETERMINATE:
+                        has_indeterminate = True
+                    elif cr.result == EvalResult.FAIL:
+                        has_fail = True
+            if not contract.auto_review_enabled or not has_required_machine:
+                expected = ReviewDecision.INDETERMINATE
+            elif has_indeterminate:
+                expected = ReviewDecision.INDETERMINATE
+            elif has_fail:
+                expected = ReviewDecision.REJECT
+            else:
+                expected = ReviewDecision.ACCEPT
+            if od != expected:
+                reasons.append(f"decision_inconsistent: got={od.value} expected={expected.value}")
+
+    except Exception:
+        reasons.append("malformed_evaluation")
 
     return reasons
