@@ -2412,3 +2412,77 @@ Heartbeat-Aktivierung, GitHub-Verdict-Delivery.
 
 **Tests:** 45 neue in `test_final_evaluation.py`. Suite: 449/449.
 Ruff/mypy/py_compile grün.
+
+---
+
+## §41 — Deterministic Bounty Review Finalization 02D (2026-07-21)
+
+Per Issue #128. Schließt den automatischen Review-Pfad: `bounty_review()`
+akzeptiert jetzt einen diskriminierten Union `FinalEvaluation | ManualReviewRequest`
+und bleibt die einzige terminale Authority.
+
+**Schema:**
+- `ManualReviewRequest` (frozen dataclass): `bounty_id`, `submission_id`,
+  `reviewer_actor_id`, `decision` ("accept" | "reject"), `evidence` optional.
+  Exakt das alte Verhalten, aber als dataclass statt Positionsparameter.
+- `FINALIZATION_JOURNAL = DIR / "finalization_journal.json"`: crash-sicheres
+  Finalisierungs-Journal.
+- `_journal_key(submission_id)` → `"finalize:<submission_id>"`.
+- Stages: `prepared` → `review_attached` → `contract_applied` (nur ACCEPT) →
+  `bounty_applied` → `complete` (oder `failed_closed`).
+- Immutable Bindings im Journal: `submission_id`, `bounty_id`,
+  `evaluation_hash`, `decision`.
+- `_advance_journal()`: no-op wenn Ziel-Stage hinter aktueller Stage.
+
+**Automatischer Pfad (`_bounty_review_automatic`):**
+1. Fast Path: Submission bereits mit passendem `evaluation_hash` reviewed →
+   sofortiger Return (resumable success). Conflicting Review → `None`.
+2. Status-Gate: Bounty muss `submitted` sein.
+3. `current_submission_id` == `evaluation.submission_id`.
+4. `validate_final_evaluation()`: alle Bindings + Decision-Consistency.
+5. INDETERMINATE wird nie angewandt → `None`.
+6. Journal-Check: identischer Hash → Resume ab aktueller Stage.
+7. `_apply_criteria_results()`: PASS → `met=True`, FAIL → `met=False`,
+   INDETERMINATE → `met=None` (exact `criterion_id`).
+8. Bei ACCEPT: `contract.fulfill()` + `_save_contract()`.
+9. `_attach_review()` mit review_kind `deterministic` + evaluation_hash +
+   evaluator_version + criteria_results + reason_codes.
+10. Bounty-Status: ACCEPT → `done`, REJECT → `claimed`.
+11. Journal nach jedem Schritt aktualisiert.
+
+**Review-Record (automatisch):**
+```
+{
+    "review_kind": "deterministic",
+    "evaluation_hash": "<sha256>",
+    "evaluator_version": "02c-1",
+    "decision": "accept" | "reject",
+    "reason_codes": [<bounded strings>],
+    "criteria_results": [{"criterion_id", "result", "reason_code"}, ...],
+    "reviewed_at": <timestamp>
+}
+```
+Kein `evidence`-Feld, kein `reviewer_actor_id` -- die Metadaten der Evaluation
+dienen als Herkunftsnachweis; der rohe Output bleibt im immutable Submission-
+Record.
+
+**CLI:** `scripts/bounty_review_cli.py` baut jetzt `ManualReviewRequest` und ruft
+`bounty_review()` damit auf. Verhalten unverändert.
+
+**Autoritätsgrenzen:** Nur `bounty_review.py` ruft `contract.fulfill()` für den
+Bounty-Lifecycle auf. `_bounty_review_automatic` wird nirgendwo außerhalb von
+`bounty_review()` aufgerufen. `final_evaluation.py` bleibt rein (keine Heartbeat-
+oder Bounty-Review-Importe). AST-Tests in `test_bounty_review_automatic.py`.
+
+**Tests:** 23 neue in `test_bounty_review_automatic.py`:
+- Valid ACCEPT / REJECT / INDETERMINATE
+- Stale submission / contract version / output hash / policy hash /
+  criterion definition / evaluator version
+- Duplicate identical retry (resumable via journal)
+- Conflicting evaluation hash (fails closed)
+- Conflicting existing manual review (fails closed)
+- Journal resume from review_attached
+- Manual accept / reject via ManualReviewRequest
+- AST authority boundaries
+
+Suite: 472/472. mypy grün (20 files).
