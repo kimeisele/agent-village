@@ -2377,60 +2377,38 @@ Finalization-Journal, Bounty-Completion.
 **Tests:** 53 neue. Vollständige Suite: 404/404. Ruff/mypy/py_compile grün.
 ---
 
-## §40 — External Bounty Lifecycle 02C (2026-07-21, zweite Korrektur)
-
-Per Issue #116. Immutable FinalEvaluation + pure Decision-Aggregation.
-
-**Architektur:**
-- `village/submission_bindings.py`: neutral (kein Terminal/Heartbeat-Import).
-- `FinalEvaluation.create()`: trusted creation mit Syntax-Validation.
-- `FinalEvaluation.from_persisted_dict()`: fail-closed — validiert Types, Enums,
-  finite evaluated_at, reason_code Syntax, recomputed Hash, reject on Mismatch.
-  Bewahrt validierte Reason-Codes in Original-Reihenfolge.
-- `_validate_reason_code_syntax()`: ASCII-Allowlist `[a-zA-Z0-9_:.=-]+`,
-  nonempty, MAX_REASON_CODE_LEN.
-- `validate_final_evaluation()`: vollständige Binding-Validation inkl.
-  work_result_id, execution_id, output_canonical_hash, review_policy_hash
-  (submission + contract). Reason-Code-Syntax-Check. Nie raise.
-- `build_final_evaluation()`: vollständige Criterion-Coverage für ALLE Outcomes.
-- INDETERMINATE outranks FAIL.
-
-**Tests:** 40 neue. Suite: 444/444. Ruff/mypy/py_compile grün.
-
-Per Issue #116. Immutable FinalEvaluation + pure Decision-Aggregation.
-
-**Architektur (korrigiert nach Review):**
-- `village/submission_bindings.py`: neutrales Modul (kein I/O, kein Heartbeat,
-  kein Review-Authority-Import). `validate_submission_bindings()` wird von
-  `final_evaluation.py` und `bounty_review.py` importiert.
-- `village/final_evaluation.py`: importiert NUR neutrale Module
-  (contracts, evaluator, submission_bindings). Kein bounty_review-Import.
-- `FinalEvaluation.create()`: trusted creation, computed Hash.
-- `FinalEvaluation.from_persisted_dict()`: fail-closed Loading — validiert
-  Types, Enums, finite evaluated_at, bounded reason_codes, recomputed
-  evaluation_hash, reject on mismatch.
-- `build_final_evaluation()`: vollständige Criterion-Coverage für ALLE
-  Outcomes (auch INDETERMINATE-Pfade). Kein leeres criteria_results wenn
-  Contract Kriterien hat.
-- `validate_final_evaluation()`: pure structural validator, nie raise.
-- INDETERMINATE outranks FAIL.
-- Reason-Codes nur mit validiertem field path oder static code.
-
-**Tests:** 26 neue in test_final_evaluation.py. Suite: 430/430. (2026-07-21)
+## §40 — External Bounty Lifecycle 02C (2026-07-21)
 
 Per Issue #116. Immutable FinalEvaluation und pure Decision-Aggregation.
 
-**FinalEvaluation (village/final_evaluation.py):**
-- `ReviewDecision`: ACCEPT, REJECT, INDETERMINATE.
-- `CriterionEvaluation` (frozen): criterion_id, definition_hash, EvalResult, reason_code.
-- `FinalEvaluation` (frozen, self-hashed): alle Submission-Bindings, Criterion-Ergebnisse,
-  overall_decision, reason_codes, evaluator_version, evaluated_at, evaluation_hash.
-- `build_final_evaluation(submission, contract)`: pure Aggregation. Validiert Bindings,
-  evaluiert jedes Kriterium, wendet Decision-Policy an.
-- INDETERMINATE precedence: INDETERMINATE outranks FAIL.
-- Kein I/O, keine State-Mutation, keine terminale Autorität.
+**Architektur:**
+- `village/submission_bindings.py`: neutrales Modul (kein Terminal/Heartbeat/
+  Review-Authority-Import). Wird von `final_evaluation.py` und `bounty_review.py`
+  importiert.
+- `FinalEvaluation` (frozen, self-hashed): alle Submission-Bindings,
+  `CriterionEvaluation` pro Kriterium, `overall_decision`, `reason_codes`,
+  `evaluator_version`, `evaluated_at`, `evaluation_hash`.
+- `FinalEvaluation.create()`: trusted creation — validiert reason-code Syntax,
+  finite evaluated_at, evaluator_version, computed Hash.
+- `FinalEvaluation.from_persisted_dict()`: fail-closed Loading — validiert
+  Types, Enums, finite evaluated_at, reason-code Syntax, recomputed Hash,
+  reject on Mismatch. Bewahrt validierte Reason-Codes in Original-Reihenfolge.
+- `build_final_evaluation()`: pure Aggregation. Validiert Bindings via
+  `validate_submission_bindings()`, evaluiert jedes Kriterium, wendet
+  Decision-Policy an. Vollständige Criterion-Coverage für ALLE Outcomes
+  (auch INDETERMINATE-Pfade).
+- `validate_final_evaluation()`: total structural validator — `getattr`
+  Guards + `try/except`, nie raise. Prüft alle Identity-Felder,
+  Bindings (work_result_id, execution_id, output_canonical_hash,
+  review_policy_hash vs submission + contract), Reason-Code-Syntax,
+  Criterion-Ordnung, Decision-Consistency.
+- `_validate_reason_code_syntax()`: ASCII-Allowlist `[a-zA-Z0-9_:.=-]+`,
+  nonempty, max 128 chars.
+- INDETERMINATE outranks FAIL.
 
 **Nicht implementiert:** automatisches Review, Anwendung von criterion.met,
-Finalization-Journal, Contract-Fulfillment, Bounty-Completion, Heartbeat-Aktivierung.
+Finalization-Journal, Contract-Fulfillment, Bounty-Completion/Rejection,
+Heartbeat-Aktivierung, GitHub-Verdict-Delivery.
 
-**Tests:** 19 neue in `test_final_evaluation.py`. Vollständige Suite: 423/423.
+**Tests:** 45 neue in `test_final_evaluation.py`. Suite: 449/449.
+Ruff/mypy/py_compile grün.
