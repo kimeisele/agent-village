@@ -633,24 +633,29 @@ def _bounty_review_automatic(evaluation: FinalEvaluation) -> dict[str, Any] | No
             submission_id, evaluation.bounty_id, evaluation.evaluation_hash, evaluation.overall_decision.value
         )
 
-    # Determine resume skip flags from journal
-    skip_attach = False
+    # Determine resume skip flags from journal AND canonical review state
+    # If matching review already persisted, never re-attach (journal may lag)
+    review_already_attached = existing_review is not None and _is_matching_deterministic_review(
+        existing_review, evaluation
+    )
+    skip_attach = review_already_attached
     skip_fulfill_save = False
     skip_bounty_save = False
     if journal_entry is not None:
         rs = journal_entry.get("stage", "prepared")
-        if rs == "review_attached":
+        if rs in ("review_attached", "contract_applied", "bounty_applied"):
             skip_attach = True
-        elif rs == "contract_applied":
-            skip_attach = True
+        if rs in ("contract_applied", "bounty_applied"):
             skip_fulfill_save = True
-        elif rs == "bounty_applied":
-            skip_attach = True
-            skip_fulfill_save = True
+        if rs == "bounty_applied":
             skip_bounty_save = True
 
-    # Build review record
-    review_record = _build_automatic_review_record(evaluation)
+    # Reuse existing review record if matching; otherwise build new
+    review_record: dict[str, Any] = (
+        existing_review
+        if review_already_attached and isinstance(existing_review, dict)
+        else _build_automatic_review_record(evaluation)
+    )
 
     # Apply criterion results to contract (in-memory, always applied on fresh load)
     _apply_criteria_results(contract, evaluation)
