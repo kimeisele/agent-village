@@ -331,14 +331,15 @@ def _init_journal(submission_id: str, bounty_id: str, evaluation_hash: str, deci
 
 
 def _advance_journal(submission_id: str, target_stage: str) -> None:
-    """Advance the journal to *target_stage* if it is past the current stage.
-    No-op if already at or past *target_stage*."""
+    """Advance the journal stage. Sets completed_at exactly once at 'complete'."""
     journal = _load(FINALIZATION_JOURNAL)
     jkey = _journal_key(submission_id)
     entry = journal.get(jkey)
     if entry is None:
         return
     cur = entry.get("stage", "prepared")
+    if cur in (_JOURNAL_FAILED_CLOSED, "complete"):
+        return
     try:
         cur_idx = _JOURNAL_STAGES.index(cur)
         tgt_idx = _JOURNAL_STAGES.index(target_stage)
@@ -348,6 +349,8 @@ def _advance_journal(submission_id: str, target_stage: str) -> None:
         return
     entry["stage"] = target_stage
     entry["updated_at"] = time.time()
+    if target_stage == "complete" and "completed_at" not in entry:
+        entry["completed_at"] = time.time()
     _save(FINALIZATION_JOURNAL, journal)
 
 
@@ -394,27 +397,82 @@ def _apply_criteria_results(contract: VillageContract, evaluation: FinalEvaluati
                 break
 
 
+def _validate_journal_record(entry: object, jkey: str, evaluation: FinalEvaluation) -> dict[str, Any] | None:
+    """Validate journal record against evaluation. Returns dict or None (fail closed)."""
+    if not isinstance(entry, dict):
+        return None
+    sid = entry.get("submission_id")
+    if not isinstance(sid, str) or not sid or sid != evaluation.submission_id:
+        return None
+    if jkey != f"finalize:{sid}":
+        return None
+    bid = entry.get("bounty_id")
+    if not isinstance(bid, str) or not bid or bid != evaluation.bounty_id:
+        return None
+    eh = entry.get("evaluation_hash")
+    if not isinstance(eh, str) or not eh or eh != evaluation.evaluation_hash:
+        return None
+    dec = entry.get("decision")
+    if not isinstance(dec, str) or dec != evaluation.overall_decision.value:
+        return None
+    stage = entry.get("stage", "")
+    if stage not in ("prepared", "review_attached", "contract_applied", "bounty_applied", "complete", "failed_closed"):
+        return None
+    for ts_field in ("created_at", "updated_at"):
+        ts = entry.get(ts_field)
+        if not isinstance(ts, (int, float)):
+            return None
+        if isinstance(ts, float) and (ts != ts or ts == float("inf")):
+            return None
+    if entry["updated_at"] < entry["created_at"]:
+        return None
+    if stage == "complete":
+        ca = entry.get("completed_at")
+        if not isinstance(ca, (int, float)):
+            return None
+        if isinstance(ca, float) and (ca != ca or ca == float("inf")):
+            return None
+    return entry
+
+
 def _is_matching_deterministic_review(review: dict[str, Any], evaluation: FinalEvaluation) -> bool:
-    """Exact canonical matching of all deterministic review fields."""
+    """Exact canonical matching. Every required field must exist with exact type/value."""
     if not isinstance(review, dict):
         return False
     if review.get("review_kind") != "deterministic":
         return False
-    if review.get("evaluation_hash") != evaluation.evaluation_hash:
+    eh = review.get("evaluation_hash")
+    if not isinstance(eh, str) or not eh or eh != evaluation.evaluation_hash:
         return False
     if review.get("evaluator_version") != evaluation.evaluator_version:
         return False
     if review.get("decision") != evaluation.overall_decision.value:
         return False
+    rc_stored = review.get("reason_codes")
+    if not isinstance(rc_stored, list) or list(evaluation.reason_codes) != rc_stored:
+        return False
     cr_stored = review.get("criteria_results")
+    if not isinstance(cr_stored, list):
+        return False
     cr_eval = [
         {"criterion_id": cr.criterion_id, "result": cr.result.value, "reason_code": cr.reason_code}
         for cr in evaluation.criteria_results
     ]
-    if cr_stored != cr_eval:
+    if len(cr_stored) != len(cr_eval):
         return False
-    rc_stored = review.get("reason_codes")
-    if isinstance(rc_stored, list) and list(evaluation.reason_codes) != rc_stored:
+    for s, e in zip(cr_stored, cr_eval):
+        if not isinstance(s, dict):
+            return False
+        if (
+            s.get("criterion_id") != e["criterion_id"]
+            or s.get("result") != e["result"]
+            or s.get("reason_code") != e["reason_code"]
+        ):
+            return False
+    ra = review.get("reviewed_at")
+    if not isinstance(ra, (int, float)):
+        return False
+    if isinstance(ra, float) and (ra != ra or ra == float("inf")):
         return False
     return True
 
@@ -553,10 +611,14 @@ def _bounty_review_automatic(evaluation: FinalEvaluation) -> dict[str, Any] | No
     journal_entry = journal.get(jkey)
 
     if journal_entry is not None:
-        if journal_entry.get("evaluation_hash") != evaluation.evaluation_hash:
+        validated = _validate_journal_record(journal_entry, jkey, evaluation)
+        if validated is None:
+            _journal_fail_closed(submission_id)
+            return None
+        if validated.get("evaluation_hash") != evaluation.evaluation_hash:
             _log_review_rejection("conflicting_journal_hash", submission_id)
             return None
-        stage = journal_entry.get("stage", "prepared")
+        stage = validated.get("stage", "prepared")
         if stage == "complete":
             # Already fully finalized — return cached result
             sub = _get_submission(submission_id)
