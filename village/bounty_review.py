@@ -500,6 +500,7 @@ def _bounty_review_automatic(evaluation: FinalEvaluation) -> dict[str, Any] | No
         if sub and sub.get("review"):
             existing = sub["review"]
             if _is_matching_deterministic_review(existing, evaluation):
+                _advance_journal(evaluation.submission_id, "complete")
                 return {"bounty": dict(bounty), "review": existing}
             # Conflicting evaluation on an already-done bounty
             return None

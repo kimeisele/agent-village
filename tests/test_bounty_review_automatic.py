@@ -725,3 +725,106 @@ def inspect_import_source(mod: object) -> str:
     import inspect
 
     return inspect.getsource(mod)
+
+
+# ── Crash recovery ──────────────────────────────────────────
+
+
+class TestCrashRecoveryAccept:
+    """Crash at each stage boundary during ACCEPT, then retry with same evaluation."""
+
+    def _setup_accept(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        _bootstrap_contract(_make_contract_with_criteria())
+        _claim("SomeAgent")
+        sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
+        contract = hb._load_contract("contract:b001:1")
+        evaluation = build_final_evaluation(sub, contract, evaluated_at=1.0)
+        assert evaluation.overall_decision == ReviewDecision.ACCEPT
+        return sub, evaluation
+
+    def test_crash_after_journal_prepared_retry_succeeds(self, monkeypatch, tmp_path):
+        sub, evaluation = self._setup_accept(monkeypatch, tmp_path)
+        # Simulate: journal prepared but review not attached
+        jkey = f"finalize:{sub['submission_id']}"
+        br._init_journal(sub["submission_id"], "b001", evaluation.evaluation_hash, "accept")
+        br._save(
+            br.FINALIZATION_JOURNAL,
+            {
+                jkey: {
+                    "submission_id": sub["submission_id"],
+                    "bounty_id": "b001",
+                    "evaluation_hash": evaluation.evaluation_hash,
+                    "decision": "accept",
+                    "stage": "prepared",
+                    "created_at": 1.0,
+                    "updated_at": 1.0,
+                }
+            },
+        )
+        # Retry
+        result = br.bounty_review(evaluation)
+        assert result is not None
+        assert result["bounty"]["status"] == "done"
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[jkey]["stage"] == "complete"
+
+    def test_crash_after_review_attached_retry_succeeds(self, monkeypatch, tmp_path):
+        sub, evaluation = self._setup_accept(monkeypatch, tmp_path)
+        # Attach review + set journal to review_attached
+        review = br._build_automatic_review_record(evaluation)
+        br._attach_review(sub["submission_id"], review)
+        jkey = f"finalize:{sub['submission_id']}"
+        br._init_journal(sub["submission_id"], "b001", evaluation.evaluation_hash, "accept")
+        br._advance_journal(sub["submission_id"], "review_attached")
+        # Retry
+        result = br.bounty_review(evaluation)
+        assert result is not None
+        assert result["bounty"]["status"] == "done"
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[jkey]["stage"] == "complete"
+
+    def test_crash_after_contract_save_retry_succeeds(self, monkeypatch, tmp_path):
+        sub, evaluation = self._setup_accept(monkeypatch, tmp_path)
+        # Complete review, contract save, advance to contract_applied
+        contract = hb._load_contract("contract:b001:1")
+        br._apply_criteria_results(contract, evaluation)
+        contract.fulfill()
+        hb._save_contract(contract)
+        jkey = f"finalize:{sub['submission_id']}"
+        br._init_journal(sub["submission_id"], "b001", evaluation.evaluation_hash, "accept")
+        br._advance_journal(sub["submission_id"], "review_attached")
+        br._advance_journal(sub["submission_id"], "contract_applied")
+        # Retry — bounty not yet done
+        result = br.bounty_review(evaluation)
+        assert result is not None
+        assert result["bounty"]["status"] == "done"
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[jkey]["stage"] == "complete"
+
+    def test_crash_before_complete_retry_succeeds(self, monkeypatch, tmp_path):
+        sub, evaluation = self._setup_accept(monkeypatch, tmp_path)
+        # Full completion except journal complete stage
+        contract = hb._load_contract("contract:b001:1")
+        br._apply_criteria_results(contract, evaluation)
+        contract.fulfill()
+        hb._save_contract(contract)
+        # Also save the bounty as "done" (simulating crash after bounty save)
+        board = hb._load(hb.BOUNTIES)
+        board["bounties"][0]["status"] = "done"
+        board["bounties"][0]["completed_at"] = 1.0
+        hb._save(hb.BOUNTIES, board)
+        jkey = f"finalize:{sub['submission_id']}"
+        br._init_journal(sub["submission_id"], "b001", evaluation.evaluation_hash, "accept")
+        br._advance_journal(sub["submission_id"], "review_attached")
+        br._advance_journal(sub["submission_id"], "contract_applied")
+        br._advance_journal(sub["submission_id"], "bounty_applied")
+        # Also attach the review (simulating crash after review + contract + bounty save)
+        review = br._build_automatic_review_record(evaluation)
+        br._attach_review(sub["submission_id"], review)
+        # Retry should recognize done bounty + matching review and return success
+        result = br.bounty_review(evaluation)
+        assert result is not None
+        assert result["bounty"]["status"] == "done"
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[jkey]["stage"] == "complete"
