@@ -19,7 +19,25 @@ def _setup(monkeypatch, tmp_path):
     monkeypatch.setattr(hb, "CONTRACTS", tmp_path / "contracts.json")
     monkeypatch.setattr(br, "SUBMISSIONS", tmp_path / "bounty_submissions.json")
     monkeypatch.setattr(br, "FINALIZATION_JOURNAL", tmp_path / "finalization_journal.json")
-    hb._save(hb.BOUNTIES, {"bounties": [{"id": "b001", "title": "t", "description": "d", "reward": "reputation", "status": "open", "created_by": "agent-village", "created_at": 0.0, "claimed_by": None, "claimed_at": None, "completed_at": None}]})
+    hb._save(
+        hb.BOUNTIES,
+        {
+            "bounties": [
+                {
+                    "id": "b001",
+                    "title": "t",
+                    "description": "d",
+                    "reward": "reputation",
+                    "status": "open",
+                    "created_by": "agent-village",
+                    "created_at": 0.0,
+                    "claimed_by": None,
+                    "claimed_at": None,
+                    "completed_at": None,
+                }
+            ]
+        },
+    )
 
 
 def _claim(actor_id="SomeAgent"):
@@ -28,18 +46,24 @@ def _claim(actor_id="SomeAgent"):
 
 def _succeeded_work_result(execution_id="exec-1", output=None):
     from village.work_result import WorkResult, WorkResultStatus
+
     return WorkResult(
         work_result_id=f"workresult:contract:b001:1:{execution_id}",
-        contract_id="contract:b001:1", execution_id=execution_id,
-        provider="deepseek", model="deepseek-v4-flash",
+        contract_id="contract:b001:1",
+        execution_id=execution_id,
+        provider="deepseek",
+        model="deepseek-v4-flash",
         status=WorkResultStatus.SUCCEEDED,
         output=output or {"gaps": [{"description": "x", "file": "village/heartbeat.py", "line": 1}]},
-        evidence={}, usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150, "cost_usd": 0.001},
+        evidence={},
+        usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150, "cost_usd": 0.001},
     )
 
 
 def _make_contract(**kw):
-    c = SuccessCriterion.create(name="gaps_present", required=True, evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "gaps"})
+    c = SuccessCriterion.create(
+        name="gaps_present", required=True, evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "gaps"}
+    )
     defaults = {"contract_id": "contract:b001:1", "title": "test", "success_criteria": [c], "auto_review_enabled": True}
     defaults.update(kw)
     contract = VillageContract(**defaults)
@@ -53,6 +77,7 @@ def _bootstrap_contract(contract):
 
 
 # ── Happy path ───────────────────────────────────────────────────
+
 
 class TestAutomaticAccept:
     def test_valid_automatic_accept(self, monkeypatch, tmp_path):
@@ -77,7 +102,12 @@ class TestAutomaticAccept:
 
 class TestAutomaticReject:
     def test_valid_automatic_reject(self, monkeypatch, tmp_path):
-        c = SuccessCriterion.create(name="summary_present", required=True, evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "summary"})
+        c = SuccessCriterion.create(
+            name="summary_present",
+            required=True,
+            evaluator=EvaluatorType.FIELD_PRESENT,
+            evaluator_params={"field": "summary"},
+        )
         contract = _make_contract(success_criteria=[c])
         _setup(monkeypatch, tmp_path)
         _bootstrap_contract(contract)
@@ -109,6 +139,7 @@ class TestIndeterminate:
 
 
 # ── Crash recovery ──────────────────────────────────────────────
+
 
 class TestCrashRecovery:
     """Crash after journal decided, before each projection."""
@@ -182,6 +213,7 @@ class TestCrashRecovery:
 
 # ── Idempotency ─────────────────────────────────────────────────
 
+
 class TestIdempotency:
     def test_duplicate_call_makes_no_changes(self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
@@ -202,6 +234,7 @@ class TestIdempotency:
 
 # ── Conflict ────────────────────────────────────────────────────
 
+
 class TestConflict:
     def test_different_hash_fails(self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
@@ -218,6 +251,7 @@ class TestConflict:
 
 # ── Manual path unchanged ────────────────────────────────────────
 
+
 class TestManualPath:
     def test_manual_accept(self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
@@ -229,7 +263,14 @@ class TestManualPath:
         contract.success_criteria[0].met = True
         hb._save_contract(contract)
 
-        result = br.bounty_review(ManualReviewRequest(bounty_id="b001", submission_id=sub["submission_id"], reviewer_actor_id="r1", decision=ReviewDecision.ACCEPT))
+        result = br.bounty_review(
+            ManualReviewRequest(
+                bounty_id="b001",
+                submission_id=sub["submission_id"],
+                reviewer_actor_id="r1",
+                decision=ReviewDecision.ACCEPT,
+            )
+        )
         assert result is not None
         assert result["bounty"]["status"] == "done"
 
@@ -239,16 +280,29 @@ class TestManualPath:
         _claim("SomeAgent")
         sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
 
-        result = br.bounty_review(ManualReviewRequest(bounty_id="b001", submission_id=sub["submission_id"], reviewer_actor_id="r1", decision=ReviewDecision.REJECT))
+        result = br.bounty_review(
+            ManualReviewRequest(
+                bounty_id="b001",
+                submission_id=sub["submission_id"],
+                reviewer_actor_id="r1",
+                decision=ReviewDecision.REJECT,
+            )
+        )
         assert result is not None
         assert result["bounty"]["status"] == "claimed"
 
 
 # ── REJECT crash recovery ──────────────────────────────────────
 
+
 class TestCrashRecoveryReject:
     def _setup_reject(self, monkeypatch, tmp_path):
-        c = SuccessCriterion.create(name="summary_present", required=True, evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "summary"})
+        c = SuccessCriterion.create(
+            name="summary_present",
+            required=True,
+            evaluator=EvaluatorType.FIELD_PRESENT,
+            evaluator_params={"field": "summary"},
+        )
         contract = _make_contract(success_criteria=[c])
         _setup(monkeypatch, tmp_path)
         _bootstrap_contract(contract)
@@ -311,9 +365,15 @@ class TestCrashRecoveryReject:
 
 # ── Resubmission after REJECT ───────────────────────────────────
 
+
 class TestResubmission:
     def test_new_submission_after_reject_uses_new_journal_key(self, monkeypatch, tmp_path):
-        c = SuccessCriterion.create(name="summary_present", required=True, evaluator=EvaluatorType.FIELD_PRESENT, evaluator_params={"field": "summary"})
+        c = SuccessCriterion.create(
+            name="summary_present",
+            required=True,
+            evaluator=EvaluatorType.FIELD_PRESENT,
+            evaluator_params={"field": "summary"},
+        )
         contract = _make_contract(success_criteria=[c])
         _setup(monkeypatch, tmp_path)
         _bootstrap_contract(contract)
@@ -324,7 +384,9 @@ class TestResubmission:
 
         # Claim and submit again
         _claim("SomeAgent")  # re-claim
-        sub2 = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result(execution_id="exec-2", output={"summary": [1]}))
+        sub2 = br.bounty_submit(
+            "b001", "SomeAgent", _succeeded_work_result(execution_id="exec-2", output={"summary": [1]})
+        )
         e2 = build_final_evaluation(sub2, hb._load_contract("contract:b001:1"), evaluated_at=1.0)
 
         result = br.bounty_review(e2)
@@ -341,6 +403,7 @@ class TestResubmission:
 
 def _inspect_import_source(mod: object) -> str:
     import inspect
+
     return inspect.getsource(mod)
 
 
@@ -380,6 +443,7 @@ class TestAuthorityBoundaries:
     def test_final_evaluation_remains_pure(self):
         """final_evaluation.py must not import heartbeat or bounty_review."""
         import ast
+
         with open("village/final_evaluation.py") as f:
             tree = ast.parse(f.read())
         for node in ast.walk(tree):
@@ -390,6 +454,7 @@ class TestAuthorityBoundaries:
     def test_no_second_completion_path(self):
         """_bounty_review_automatic is only called from bounty_review()."""
         import ast
+
         with open("village/bounty_review.py") as f:
             src = f.read()
         tree = ast.parse(src)
@@ -423,6 +488,7 @@ class TestAuthorityBoundaries:
     def test_bounty_review_is_sole_fulfill_caller(self):
         """Only bounty_review calls .fulfill() on a VillageContract for the bounty lifecycle."""
         import ast
+
         with open("village/contracts.py") as f:
             contracts_src = f.read()
         contracts_tree = ast.parse(contracts_src)
@@ -433,6 +499,7 @@ class TestAuthorityBoundaries:
 
         try:
             import village.execution_orchestrator as orch
+
             src = _inspect_import_source(orch)
             tree = ast.parse(src)
             for node in ast.walk(tree):

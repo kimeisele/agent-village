@@ -87,7 +87,11 @@ def _redact_secret_patterns(value: str) -> str:
 def _safe_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
     def _clean(value: Any) -> Any:
         if isinstance(value, dict):
-            return {k: _clean(v) for k, v in value.items() if not any(banned in k.lower() for banned in _EVIDENCE_BANNED_KEY_SUBSTRINGS)}
+            return {
+                k: _clean(v)
+                for k, v in value.items()
+                if not any(banned in k.lower() for banned in _EVIDENCE_BANNED_KEY_SUBSTRINGS)
+            }
         if isinstance(value, list):
             return [_clean(v) for v in value]
         if isinstance(value, str):
@@ -324,7 +328,11 @@ def _is_matching_deterministic_review(review: dict[str, Any], evaluation: FinalE
     for s, e in zip(cr_stored, cr_eval):
         if not isinstance(s, dict):
             return False
-        if s.get("criterion_id") != e["criterion_id"] or s.get("result") != e["result"] or s.get("reason_code") != e["reason_code"]:
+        if (
+            s.get("criterion_id") != e["criterion_id"]
+            or s.get("result") != e["result"]
+            or s.get("reason_code") != e["reason_code"]
+        ):
             return False
     ra = review.get("reviewed_at")
     if not isinstance(ra, (int, float)):
