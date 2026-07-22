@@ -79,7 +79,7 @@ class ManualReviewRequest:
     bounty_id: str
     submission_id: str
     reviewer_actor_id: str
-    decision: str  # "accept" | "reject"
+    decision: ReviewDecision  # ACCEPT or REJECT only
     evidence: dict[str, Any] | None = None
 
 
@@ -383,15 +383,12 @@ def _apply_criteria_results(contract: VillageContract, evaluation: FinalEvaluati
 
 
 # ── Review ────────────────────────────────────────────────────────────────
-_VALID_DECISIONS = ("accept", "reject")
-
-
 def _bounty_review_manual(request: ManualReviewRequest) -> dict[str, Any] | None:
     """Manual (human-authorized) review path.  Preserves the exact behavior
     of the original ``bounty_review()`` before the discriminated-union
     refactor (Issue #128 / BEFUND.md §41)."""
-    if request.decision not in _VALID_DECISIONS:
-        raise ValueError(f"invalid decision: {request.decision!r}, must be one of {_VALID_DECISIONS}")
+    if request.decision not in (ReviewDecision.ACCEPT, ReviewDecision.REJECT):
+        raise ValueError(f"invalid decision: {request.decision!r}, must be ACCEPT or REJECT")
 
     board = _load(heartbeat.BOUNTIES)
     bounty = _find_bounty(board, request.bounty_id)
@@ -414,12 +411,12 @@ def _bounty_review_manual(request: ManualReviewRequest) -> dict[str, Any] | None
 
     review_record = {
         "reviewer_actor_id": request.reviewer_actor_id,
-        "decision": request.decision,
+        "decision": request.decision.value,
         "evidence": _safe_evidence(request.evidence or {}),
         "reviewed_at": time.time(),
     }
 
-    if request.decision == "reject":
+    if request.decision == ReviewDecision.REJECT:
         _attach_review(submission_id, review_record)
         bounty["status"] = "claimed"
         _save(heartbeat.BOUNTIES, board)

@@ -70,6 +70,7 @@ def main() -> int:
         return 1
 
     from village.bounty_review import ManualReviewRequest
+    from village.final_evaluation import ReviewDecision
 
     # Call the sole authorized completion boundary
     result = br.bounty_review(
@@ -77,7 +78,7 @@ def main() -> int:
             bounty_id=bounty_id,
             submission_id=submission_id,
             reviewer_actor_id=reviewer_actor_id,
-            decision=decision,
+            decision=ReviewDecision(decision),
         )
     )
     if result is None:

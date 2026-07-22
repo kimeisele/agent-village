@@ -15,6 +15,7 @@ import village.bounty_review as br
 import village.heartbeat as hb
 from village.bounty_review import ManualReviewRequest
 from village.contracts import ContractState
+from village.final_evaluation import ReviewDecision
 from village.work_result import WorkResult, WorkResultStatus
 
 
@@ -226,7 +227,10 @@ def test_done_bounty_is_not_submittable(monkeypatch, tmp_path):
     sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
     br.bounty_review(
         ManualReviewRequest(
-            bounty_id="b001", submission_id=sub["submission_id"], reviewer_actor_id="reviewer-1", decision="accept"
+            bounty_id="b001",
+            submission_id=sub["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.ACCEPT,
         )
     )
     assert hb._load(hb.BOUNTIES)["bounties"][0]["status"] == "done"
@@ -294,7 +298,10 @@ def test_accept_moves_submitted_to_done(monkeypatch, tmp_path):
 
     result = br.bounty_review(
         ManualReviewRequest(
-            bounty_id="b001", submission_id=sub["submission_id"], reviewer_actor_id="reviewer-1", decision="accept"
+            bounty_id="b001",
+            submission_id=sub["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.ACCEPT,
         )
     )
 
@@ -310,7 +317,10 @@ def test_accept_fulfills_the_contract_only_now(monkeypatch, tmp_path):
 
     br.bounty_review(
         ManualReviewRequest(
-            bounty_id="b001", submission_id=sub["submission_id"], reviewer_actor_id="reviewer-1", decision="accept"
+            bounty_id="b001",
+            submission_id=sub["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.ACCEPT,
         )
     )
 
@@ -327,7 +337,7 @@ def test_accept_persists_reviewer_and_decision(monkeypatch, tmp_path):
             bounty_id="b001",
             submission_id=submission["submission_id"],
             reviewer_actor_id="reviewer-42",
-            decision="accept",
+            decision=ReviewDecision.ACCEPT,
         )
     )
 
@@ -348,7 +358,10 @@ def test_accept_with_no_success_criteria_fulfills_trivially(monkeypatch, tmp_pat
 
     result = br.bounty_review(
         ManualReviewRequest(
-            bounty_id="b001", submission_id=sub["submission_id"], reviewer_actor_id="reviewer-1", decision="accept"
+            bounty_id="b001",
+            submission_id=sub["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.ACCEPT,
         )
     )
     assert result is not None
@@ -370,7 +383,10 @@ def test_accept_with_unmet_required_criterion_is_refused(monkeypatch, tmp_path):
 
     result = br.bounty_review(
         ManualReviewRequest(
-            bounty_id="b001", submission_id=sub["submission_id"], reviewer_actor_id="reviewer-1", decision="accept"
+            bounty_id="b001",
+            submission_id=sub["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.ACCEPT,
         )
     )
 
@@ -395,7 +411,10 @@ def test_accept_with_met_required_criterion_fulfills_contract(monkeypatch, tmp_p
 
     result = br.bounty_review(
         ManualReviewRequest(
-            bounty_id="b001", submission_id=sub["submission_id"], reviewer_actor_id="reviewer-1", decision="accept"
+            bounty_id="b001",
+            submission_id=sub["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.ACCEPT,
         )
     )
 
@@ -416,7 +435,7 @@ def test_reject_resets_bounty_to_claimed(monkeypatch, tmp_path):
             bounty_id="b001",
             submission_id=sub["submission_id"],
             reviewer_actor_id="reviewer-1",
-            decision="reject",
+            decision=ReviewDecision.REJECT,
             evidence={"reason": "missing coverage"},
         )
     )
@@ -433,7 +452,10 @@ def test_reject_leaves_contract_active(monkeypatch, tmp_path):
 
     br.bounty_review(
         ManualReviewRequest(
-            bounty_id="b001", submission_id=sub["submission_id"], reviewer_actor_id="reviewer-1", decision="reject"
+            bounty_id="b001",
+            submission_id=sub["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.REJECT,
         )
     )
 
@@ -450,7 +472,7 @@ def test_rejected_work_result_stays_in_audit_history(monkeypatch, tmp_path):
             bounty_id="b001",
             submission_id=submission["submission_id"],
             reviewer_actor_id="reviewer-1",
-            decision="reject",
+            decision=ReviewDecision.REJECT,
             evidence={"reason": "not good enough"},
         )
     )
@@ -467,7 +489,10 @@ def test_resubmit_possible_after_reject(monkeypatch, tmp_path):
     s1 = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result(execution_id="exec-1"))
     br.bounty_review(
         ManualReviewRequest(
-            bounty_id="b001", submission_id=s1["submission_id"], reviewer_actor_id="reviewer-1", decision="reject"
+            bounty_id="b001",
+            submission_id=s1["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.REJECT,
         )
     )
 
@@ -501,7 +526,9 @@ def test_review_on_non_submitted_bounty_is_rejected(monkeypatch, tmp_path):
     _claim("SomeAgent")  # only "claimed", never submitted
 
     result = br.bounty_review(
-        ManualReviewRequest(bounty_id="b001", submission_id="no-op", reviewer_actor_id="reviewer-1", decision="accept")
+        ManualReviewRequest(
+            bounty_id="b001", submission_id="no-op", reviewer_actor_id="reviewer-1", decision=ReviewDecision.ACCEPT
+        )
     )
     assert result is None
 
@@ -512,13 +539,19 @@ def test_duplicate_review_after_already_done_is_rejected(monkeypatch, tmp_path):
     sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
     br.bounty_review(
         ManualReviewRequest(
-            bounty_id="b001", submission_id=sub["submission_id"], reviewer_actor_id="reviewer-1", decision="accept"
+            bounty_id="b001",
+            submission_id=sub["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.ACCEPT,
         )
     )
 
     result = br.bounty_review(
         ManualReviewRequest(
-            bounty_id="b001", submission_id=sub["submission_id"], reviewer_actor_id="reviewer-1", decision="accept"
+            bounty_id="b001",
+            submission_id=sub["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.ACCEPT,
         )
     )  # duplicate call
     assert result is None
@@ -553,7 +586,7 @@ def test_resubmit_of_the_same_execution_after_reject_does_not_overwrite_the_firs
             bounty_id="b001",
             submission_id=first["submission_id"],
             reviewer_actor_id="reviewer-1",
-            decision="reject",
+            decision=ReviewDecision.REJECT,
             evidence={"reason": "not good enough"},
         )
     )
@@ -625,7 +658,7 @@ def test_multiple_reject_resubmit_cycles_preserve_full_history(monkeypatch, tmp_
                 bounty_id="b001",
                 submission_id=s["submission_id"],
                 reviewer_actor_id="reviewer-1",
-                decision="reject",
+                decision=ReviewDecision.REJECT,
                 evidence={"attempt": i},
             )
         )

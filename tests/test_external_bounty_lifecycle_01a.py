@@ -17,6 +17,7 @@ import village.heartbeat as hb
 from village.bounty_review import ManualReviewRequest
 from village.contracts import ContractState
 from village.execution_orchestrator import ExecutionRequest, run_operator_execution
+from village.final_evaluation import ReviewDecision
 from village.village_core import (
     CanonicalIngressEvent,
     sha256_hex,
@@ -376,7 +377,10 @@ class TestManualReviewEntry:
         # First review: accept
         result1 = br.bounty_review(
             ManualReviewRequest(
-                bounty_id=bid, submission_id=sub["submission_id"], reviewer_actor_id="reviewer1", decision="accept"
+                bounty_id=bid,
+                submission_id=sub["submission_id"],
+                reviewer_actor_id="reviewer1",
+                decision=ReviewDecision.ACCEPT,
             )
         )
         assert result1 is not None
@@ -384,7 +388,10 @@ class TestManualReviewEntry:
         # Second review: refused (bounty already done)
         result2 = br.bounty_review(
             ManualReviewRequest(
-                bounty_id=bid, submission_id=sub["submission_id"], reviewer_actor_id="reviewer2", decision="accept"
+                bounty_id=bid,
+                submission_id=sub["submission_id"],
+                reviewer_actor_id="reviewer2",
+                decision=ReviewDecision.ACCEPT,
             )
         )
         assert result2 is None
@@ -394,7 +401,10 @@ class TestManualReviewEntry:
 
         result = br.bounty_review(
             ManualReviewRequest(
-                bounty_id=bid, submission_id=sub["submission_id"], reviewer_actor_id="reviewer1", decision="accept"
+                bounty_id=bid,
+                submission_id=sub["submission_id"],
+                reviewer_actor_id="reviewer1",
+                decision=ReviewDecision.ACCEPT,
             )
         )
         assert result is not None
@@ -408,7 +418,10 @@ class TestManualReviewEntry:
 
         result = br.bounty_review(
             ManualReviewRequest(
-                bounty_id=bid, submission_id=sub["submission_id"], reviewer_actor_id="reviewer1", decision="reject"
+                bounty_id=bid,
+                submission_id=sub["submission_id"],
+                reviewer_actor_id="reviewer1",
+                decision=ReviewDecision.REJECT,
             )
         )
         assert result is not None
@@ -511,7 +524,7 @@ class TestEndToEnd:
                 bounty_id=bid,
                 submission_id=outcome.submission["submission_id"],
                 reviewer_actor_id="reviewer1",
-                decision="accept",
+                decision=ReviewDecision.ACCEPT,
             )
         )
         assert review_result is not None

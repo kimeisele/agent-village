@@ -552,7 +552,10 @@ class TestManualPath:
 
         result = br.bounty_review(
             ManualReviewRequest(
-                bounty_id="b001", submission_id=sub["submission_id"], reviewer_actor_id="reviewer-1", decision="accept"
+                bounty_id="b001",
+                submission_id=sub["submission_id"],
+                reviewer_actor_id="reviewer-1",
+                decision=ReviewDecision.ACCEPT,
             )
         )
         assert result is not None
@@ -567,7 +570,10 @@ class TestManualPath:
 
         result = br.bounty_review(
             ManualReviewRequest(
-                bounty_id="b001", submission_id=sub["submission_id"], reviewer_actor_id="reviewer-1", decision="reject"
+                bounty_id="b001",
+                submission_id=sub["submission_id"],
+                reviewer_actor_id="reviewer-1",
+                decision=ReviewDecision.REJECT,
             )
         )
         assert result is not None
