@@ -306,7 +306,8 @@ def bounty_submit(bounty_id: str, actor_id: str, work_result: WorkResult) -> dic
 
 
 # ── Finalization Journal ─────────────────────────────────────────────────
-_JOURNAL_STAGES = ("prepared", "review_attached", "contract_applied", "bounty_applied", "complete", "failed_closed")
+_JOURNAL_STAGES = ("prepared", "review_attached", "contract_applied", "bounty_applied", "complete")
+_JOURNAL_FAILED_CLOSED = "failed_closed"
 
 
 def _journal_key(submission_id: str) -> str:
@@ -351,7 +352,15 @@ def _advance_journal(submission_id: str, target_stage: str) -> None:
 
 
 def _journal_fail_closed(submission_id: str) -> None:
-    _advance_journal(submission_id, "failed_closed")
+    """Set the journal stage to failed_closed. Never transitions from complete."""
+    journal = _load(FINALIZATION_JOURNAL)
+    jkey = _journal_key(submission_id)
+    entry = journal.get(jkey)
+    if entry is None or entry.get("stage") == "complete":
+        return
+    entry["stage"] = _JOURNAL_FAILED_CLOSED
+    entry["updated_at"] = time.time()
+    _save(FINALIZATION_JOURNAL, journal)
 
 
 # ── Automatic review helpers ─────────────────────────────────────────────
@@ -371,6 +380,8 @@ def _build_automatic_review_record(evaluation: FinalEvaluation) -> dict[str, Any
 
 
 def _apply_criteria_results(contract: VillageContract, evaluation: FinalEvaluation) -> None:
+    """Apply evaluation results by exact criterion_id.
+    PASS→met=True, FAIL→met=False, INDETERMINATE→met=None (explicit)."""
     for cr in evaluation.criteria_results:
         for sc in contract.success_criteria:
             if sc.criterion_id == cr.criterion_id:
@@ -378,8 +389,34 @@ def _apply_criteria_results(contract: VillageContract, evaluation: FinalEvaluati
                     sc.met = True
                 elif cr.result == EvalResult.FAIL:
                     sc.met = False
-                # INDETERMINATE → met stays None
+                else:
+                    sc.met = None  # INDETERMINATE explicitly cleared
                 break
+
+
+def _is_matching_deterministic_review(review: dict[str, Any], evaluation: FinalEvaluation) -> bool:
+    """Exact canonical matching of all deterministic review fields."""
+    if not isinstance(review, dict):
+        return False
+    if review.get("review_kind") != "deterministic":
+        return False
+    if review.get("evaluation_hash") != evaluation.evaluation_hash:
+        return False
+    if review.get("evaluator_version") != evaluation.evaluator_version:
+        return False
+    if review.get("decision") != evaluation.overall_decision.value:
+        return False
+    cr_stored = review.get("criteria_results")
+    cr_eval = [
+        {"criterion_id": cr.criterion_id, "result": cr.result.value, "reason_code": cr.reason_code}
+        for cr in evaluation.criteria_results
+    ]
+    if cr_stored != cr_eval:
+        return False
+    rc_stored = review.get("reason_codes")
+    if isinstance(rc_stored, list) and list(evaluation.reason_codes) != rc_stored:
+        return False
+    return True
 
 
 # ── Review ────────────────────────────────────────────────────────────────
@@ -444,28 +481,28 @@ def _bounty_review_automatic(evaluation: FinalEvaluation) -> dict[str, Any] | No
 
     Validates bindings, checks for INDETERMINATE (never applied), applies
     criterion results, and uses the finalization journal for crash-safe
-    retry with identical ``evaluation_hash``."""
-    # Fast path: submission already has a matching review → resumable success.
-    # Load submission by evaluation.submission_id so that retries work even
-    # when the bounty's current_submission_id has moved on (e.g. after a
-    # completed review the bounty is no longer "submitted").
+    retry with identical ``evaluation_hash``.  Every retry reconciles full
+    canonical state — there is no fast-path early matching-hash return."""
+    # Pre-load submission for existing-review check (used later for matching).
     pre_submission = _get_submission(evaluation.submission_id)
-    if pre_submission is not None:
-        existing_review = pre_submission.get("review")
-        if existing_review is not None:
-            eval_hash = existing_review.get("evaluation_hash", "")
-            if eval_hash == evaluation.evaluation_hash:
-                board = _load(heartbeat.BOUNTIES)
-                bounty = _find_bounty(board, evaluation.bounty_id)
-                return {"bounty": dict(bounty) if bounty else {}, "review": existing_review}
-            # Conflicting review — fail closed (never apply a second decision)
-            _log_review_rejection("conflicting_review", evaluation.submission_id)
-            return None
 
     # Freshly load from persistence
     board = _load(heartbeat.BOUNTIES)
     bounty = _find_bounty(board, evaluation.bounty_id)
-    if bounty is None or bounty.get("status") != "submitted":
+    if bounty is None:
+        return None
+    bounty_status = bounty.get("status")
+    # Retries after completion: check journal and return cached result
+    if bounty_status not in ("submitted", "done"):
+        return None
+    if bounty_status == "done":
+        sub = _get_submission(evaluation.submission_id)
+        if sub and sub.get("review"):
+            existing = sub["review"]
+            if _is_matching_deterministic_review(existing, evaluation):
+                return {"bounty": dict(bounty), "review": existing}
+            # Conflicting evaluation on an already-done bounty
+            return None
         return None
 
     submission_id: str | None = bounty.get("current_submission_id")
@@ -501,9 +538,13 @@ def _bounty_review_automatic(evaluation: FinalEvaluation) -> dict[str, Any] | No
         _log_review_rejection("indeterminate_not_applied", submission_id)
         return None
 
-    # Note: existing-review check is handled by the fast path above, so we
-    # proceed directly to the journal here.  At this point the submission
-    # has NO review (otherwise the fast path would have returned).
+    # Check for existing review — matching resumes, conflicting fails closed
+    existing_review = pre_submission.get("review") if pre_submission is not None else None
+    if existing_review is not None:
+        if not _is_matching_deterministic_review(existing_review, evaluation):
+            _log_review_rejection("conflicting_review", evaluation.submission_id)
+            return None
+        # Matching review: resume from journal, don't re-attach
 
     # Check / initialise journal
     journal = _load(FINALIZATION_JOURNAL)
@@ -556,16 +597,17 @@ def _bounty_review_automatic(evaluation: FinalEvaluation) -> dict[str, Any] | No
         _attach_review(submission_id, review_record)
     _advance_journal(submission_id, "review_attached")
 
-    # Stage: contract_applied (ACCEPT only)
-    if evaluation.overall_decision == ReviewDecision.ACCEPT:
-        if not skip_fulfill_save:
+    # Stage: contract_applied (ACCEPT fulfills, REJECT saves results)
+    if not skip_fulfill_save:
+        if evaluation.overall_decision == ReviewDecision.ACCEPT:
             try:
                 contract.fulfill()
             except ValueError:
                 _journal_fail_closed(submission_id)
                 return None
-            _save_contract(contract)
-        _advance_journal(submission_id, "contract_applied")
+        # Save contract for BOTH decisions (criterion results persisted)
+        _save_contract(contract)
+    _advance_journal(submission_id, "contract_applied")
 
     # Stage: bounty_applied
     if not skip_bounty_save:

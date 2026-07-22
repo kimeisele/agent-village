@@ -458,14 +458,17 @@ class TestJournalRetry:
 
         evaluation = build_final_evaluation(sub, contract, evaluated_at=1.0)
 
-        # Manually attach a matching review
+        # Attach a matching review using the actual evaluation data
         review_record = {
             "review_kind": "deterministic",
             "evaluation_hash": evaluation.evaluation_hash,
             "evaluator_version": EVALUATOR_VERSION,
-            "decision": "accept",
-            "reason_codes": [],
-            "criteria_results": [],
+            "decision": evaluation.overall_decision.value,
+            "reason_codes": list(evaluation.reason_codes),
+            "criteria_results": [
+                {"criterion_id": cr.criterion_id, "result": cr.result.value, "reason_code": cr.reason_code}
+                for cr in evaluation.criteria_results
+            ],
             "reviewed_at": 0.0,
         }
         br._attach_review(sub["submission_id"], review_record)
