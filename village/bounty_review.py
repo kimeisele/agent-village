@@ -604,6 +604,7 @@ def _verify_complete_projections(
     contract: VillageContract,
     bounty: dict[str, Any],
     evaluation: FinalEvaluation,
+    journal_entry: dict[str, Any],
 ) -> bool:
     """Verify ALL projections for a journal at 'complete' stage.
 
@@ -638,11 +639,30 @@ def _verify_complete_projections(
         return False
     if not _bounty_finalization_matches(bounty, evaluation):
         return False
-    # Timestamp sanity
+    # Timestamp sanity — bounty and review
     if evaluation.overall_decision == ReviewDecision.ACCEPT:
         if not _is_finite_timestamp(bounty.get("completed_at")):
             return False
     if not _is_finite_timestamp(review.get("reviewed_at")):
+        return False
+    # Journal timestamp validation
+    if not isinstance(journal_entry, dict):
+        return False
+    created_at = journal_entry.get("created_at")
+    updated_at = journal_entry.get("updated_at")
+    completed_at = journal_entry.get("completed_at")
+    if not _is_finite_timestamp(created_at):
+        return False
+    if not _is_finite_timestamp(updated_at):
+        return False
+    if not _is_finite_timestamp(completed_at):
+        return False
+    assert isinstance(created_at, (int, float))
+    assert isinstance(updated_at, (int, float))
+    assert isinstance(completed_at, (int, float))
+    if created_at > updated_at:
+        return False
+    if created_at > completed_at:
         return False
     return True
 
@@ -698,7 +718,7 @@ def _bounty_review_automatic(evaluation: FinalEvaluation) -> dict[str, Any] | No
             return None
         if stage == _JOURNAL_COMPLETE:
             # Verify ALL projections; never return cached success on contradiction
-            if _verify_complete_projections(submission, contract, bounty, evaluation):
+            if _verify_complete_projections(submission, contract, bounty, evaluation, journal_entry):
                 existing_review = submission.get("review")
                 if isinstance(existing_review, dict):
                     return {"bounty": dict(bounty), "review": existing_review}

@@ -916,6 +916,83 @@ class TestTimestampValidation:
         journal = hb._load(br.FINALIZATION_JOURNAL)
         assert journal[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
 
+    def test_negative_journal_created_at_fails_closed(self, monkeypatch, tmp_path):
+        """Complete journal with negative created_at → failed_closed."""
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        assert br.bounty_review(evaluation) is not None
+
+        # Tamper: set journal created_at negative
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        jkey = br._journal_key(sub["submission_id"])
+        journal[jkey]["created_at"] = -1.0
+        hb._save(br.FINALIZATION_JOURNAL, journal)
+
+        result = br.bounty_review(evaluation)
+        assert result is None
+        journal2 = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal2[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
+
+    def test_boolean_journal_updated_at_fails_closed(self, monkeypatch, tmp_path):
+        """Complete journal with boolean updated_at → failed_closed."""
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        assert br.bounty_review(evaluation) is not None
+
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        jkey = br._journal_key(sub["submission_id"])
+        journal[jkey]["updated_at"] = True
+        hb._save(br.FINALIZATION_JOURNAL, journal)
+
+        result = br.bounty_review(evaluation)
+        assert result is None
+        journal2 = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal2[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
+
+    def test_negative_journal_completed_at_fails_closed(self, monkeypatch, tmp_path):
+        """Complete journal with negative completed_at → failed_closed."""
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        assert br.bounty_review(evaluation) is not None
+
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        jkey = br._journal_key(sub["submission_id"])
+        journal[jkey]["completed_at"] = -5.0
+        hb._save(br.FINALIZATION_JOURNAL, journal)
+
+        result = br.bounty_review(evaluation)
+        assert result is None
+        journal2 = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal2[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
+
+    def test_completed_at_before_created_at_fails_closed(self, monkeypatch, tmp_path):
+        """Complete journal with completed_at < created_at → failed_closed."""
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        assert br.bounty_review(evaluation) is not None
+
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        jkey = br._journal_key(sub["submission_id"])
+        created = journal[jkey]["created_at"]
+        journal[jkey]["completed_at"] = created - 10.0
+        hb._save(br.FINALIZATION_JOURNAL, journal)
+
+        result = br.bounty_review(evaluation)
+        assert result is None
+        journal2 = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal2[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
+
+    def test_missing_journal_completed_at_fails_closed(self, monkeypatch, tmp_path):
+        """Complete journal without completed_at → failed_closed (non-finite timestamp)."""
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        assert br.bounty_review(evaluation) is not None
+
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        jkey = br._journal_key(sub["submission_id"])
+        del journal[jkey]["completed_at"]
+        hb._save(br.FINALIZATION_JOURNAL, journal)
+
+        result = br.bounty_review(evaluation)
+        assert result is None
+        journal2 = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal2[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
+
 
 # ── AST authority boundaries ───────────────────────────────────
 
