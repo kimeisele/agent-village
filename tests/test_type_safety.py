@@ -131,7 +131,11 @@ class TestSubmissionIdValidation:
         )
 
         # bounty_review should handle gracefully (no contract → None)
-        result = br.bounty_review("b001", "reviewer1", "accept")
+        result = br.bounty_review(
+            br.ManualReviewRequest(
+                bounty_id="b001", submission_id="dummy", reviewer_actor_id="reviewer1", decision="accept"
+            )
+        )
         assert result is None
 
 

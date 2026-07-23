@@ -14,8 +14,10 @@ import pytest
 
 import village.bounty_review as br
 import village.heartbeat as hb
+from village.bounty_review import ManualReviewRequest
 from village.contracts import ContractState
 from village.execution_orchestrator import ExecutionRequest, run_operator_execution
+from village.final_evaluation import ReviewDecision
 from village.village_core import (
     CanonicalIngressEvent,
     sha256_hex,
@@ -370,20 +372,41 @@ class TestManualReviewEntry:
         assert stored_sub["bounty_id"] == bid  # correct match
 
     def test_duplicate_review_refused(self, isolated_village, open_bounty):
-        bid, _sub = self._create_submitted_bounty(isolated_village, open_bounty)
+        bid, sub = self._create_submitted_bounty(isolated_village, open_bounty)
 
         # First review: accept
-        result1 = br.bounty_review(bid, "reviewer1", "accept")
+        result1 = br.bounty_review(
+            ManualReviewRequest(
+                bounty_id=bid,
+                submission_id=sub["submission_id"],
+                reviewer_actor_id="reviewer1",
+                decision=ReviewDecision.ACCEPT,
+            )
+        )
         assert result1 is not None
 
-        # Second review: refused
-        result2 = br.bounty_review(bid, "reviewer2", "accept")
+        # Second review: refused (bounty already done)
+        result2 = br.bounty_review(
+            ManualReviewRequest(
+                bounty_id=bid,
+                submission_id=sub["submission_id"],
+                reviewer_actor_id="reviewer2",
+                decision=ReviewDecision.ACCEPT,
+            )
+        )
         assert result2 is None
 
     def test_accept_moves_bounty_to_done(self, isolated_village, open_bounty):
         bid, sub = self._create_submitted_bounty(isolated_village, open_bounty)
 
-        result = br.bounty_review(bid, "reviewer1", "accept")
+        result = br.bounty_review(
+            ManualReviewRequest(
+                bounty_id=bid,
+                submission_id=sub["submission_id"],
+                reviewer_actor_id="reviewer1",
+                decision=ReviewDecision.ACCEPT,
+            )
+        )
         assert result is not None
 
         board = hb._load(hb.BOUNTIES)
@@ -393,7 +416,14 @@ class TestManualReviewEntry:
     def test_reject_resets_bounty_to_claimed(self, isolated_village, open_bounty):
         bid, sub = self._create_submitted_bounty(isolated_village, open_bounty)
 
-        result = br.bounty_review(bid, "reviewer1", "reject")
+        result = br.bounty_review(
+            ManualReviewRequest(
+                bounty_id=bid,
+                submission_id=sub["submission_id"],
+                reviewer_actor_id="reviewer1",
+                decision=ReviewDecision.REJECT,
+            )
+        )
         assert result is not None
 
         board = hb._load(hb.BOUNTIES)
@@ -489,7 +519,14 @@ class TestEndToEnd:
         assert bounty["status"] == "submitted"
 
         # 5. Review — accept
-        review_result = br.bounty_review(bid, "reviewer1", "accept")
+        review_result = br.bounty_review(
+            ManualReviewRequest(
+                bounty_id=bid,
+                submission_id=outcome.submission["submission_id"],
+                reviewer_actor_id="reviewer1",
+                decision=ReviewDecision.ACCEPT,
+            )
+        )
         assert review_result is not None
 
         # 6. Bounty is done

@@ -2412,3 +2412,93 @@ Heartbeat-Aktivierung, GitHub-Verdict-Delivery.
 
 **Tests:** 45 neue in `test_final_evaluation.py`. Suite: 449/449.
 Ruff/mypy/py_compile grün.
+
+---
+
+## §41 — Deterministic Bounty Review Finalization 02D (2026-07-23)
+
+Per Issue #128. Schließt den automatischen Review-Pfad: `bounty_review()`
+akzeptiert einen diskriminierten Union `FinalEvaluation | ManualReviewRequest`
+und bleibt die einzige terminale Authority.
+
+Das Journal verwendet ein Commit-and-Replay-Modell mit atomarem Decide-Schritt
+gefolgt von idempotenten Projektionen (Review, Contract, Bounty). Drei Stages:
+`decided`, `complete`, `failed_closed`. Keine alten Multi-Stage-Stages.
+
+**Journal-Stages:**
+- `decided` — atomarer Commit aller immutable Bindings (7 Felder: submission_id,
+  bounty_id, contract_id, contract_version, evaluation_hash, decision,
+  evaluator_version).
+- `complete` — alle Projektionen bestätigt. `completed_at` genau einmal gesetzt.
+- `failed_closed` — Widerspruch oder Korruption erkannt. Von jeder Stage
+  erreichbar (inklusive complete bei nachträglicher Projektions-Korruption).
+
+**Binding-Validierung (`_validate_journal_bindings`):**
+Alle 7 immutable Felder werden strikt geprüft. Malformed Stage → failed_closed.
+Binding-Mismatch gegen non-complete → failed_closed. Binding-Mismatch gegen
+complete → return None (gültiger Complete-Record bleibt erhalten).
+
+**Complete-Record-Verifikation (`_verify_complete_projections`):**
+Prüft ALLE Projektionen: deterministic review, contract state + evaluation
+history, bounty state + finalization identity, criteria match, timestamps.
+Zusätzlich werden die Journal-Timestamps validiert: `created_at`, `updated_at`,
+`completed_at` müssen finite, nicht-negative, nicht-booleane numerische Werte
+sein (`_is_finite_timestamp`). Erforderliche Ordnung: `created_at <= updated_at`
+und `created_at <= completed_at`. Malformed oder inkonsistente Journal-Timestamps
+→ return None + journal stage → failed_closed + diagnostic →
+`complete_contradiction`. Jede Abweichung → failed_closed.
+
+**Bounty- Projektion (sicher):**
+- ACCEPT: `submitted` mit exaktem current_submission → `done` + `completed_at`
+  + `_finalized_by`. `done` mit exakt match → no-op. `done` mit anderem
+  `_finalized_by` → failed_closed. Andere States → failed_closed.
+- REJECT: `submitted` → `claimed` + `_finalized_by`. `claimed` mit exact match
+  → no-op. `done` → failed_closed.
+
+**Contract Evaluation History:**
+`contract.extra["auto_evaluations"]` ist ein dict keyed by `submission_id`.
+Jeder Eintrag: `{submission_id, evaluation_hash, decision, evaluator_version}`.
+REJECT gefolgt von neuer Submission: alter Eintrag bleibt, neuer Eintrag wird
+mit neuem submission_id angehängt. Kein Überschreiben, kein Single-Value.
+
+**Bounty Finalization Identity:**
+`bounty["_finalized_by"]`: `{submission_id, evaluation_hash, decision}`.
+Erlaubt Unterscheidung zwischen exaktem Replay und nicht verwandtem State.
+
+**Atomic Persistence (vollständig):**
+`_atomic_save_json` (temp file → flush → fsync → os.replace → fsync dir) für
+ALLE Schreibvorgänge: journal decided, journal complete, journal failed_closed,
+review attachment, contract projection, bounty projection. Temp-File-Cleanup
+bei Exceptions. Kein nicht-atomares `_save()` im automatischen Pfad.
+
+**Exact Review Matching (`_is_matching_deterministic_review`):**
+Kanonische Felder: `review_kind`, `evaluation_hash`, `evaluator_version`,
+`decision`, `reason_codes`, `criteria_results`, `reviewed_at`. `reviewed_at`
+validiert als finiter numerischer Timestamp (NaN, ±Inf, bool rejected).
+
+**CLI:** `scripts/bounty_review_cli.py` baut `ManualReviewRequest` und ruft
+`bounty_review()` damit auf. Verhalten unverändert.
+
+**Autoritätsgrenzen:** Nur `bounty_review.py` ruft `contract.fulfill()` für den
+Bounty-Lifecycle auf. `_bounty_review_automatic` wird nirgendwo außerhalb von
+`bounty_review()` aufgerufen. `final_evaluation.py` bleibt rein (keine Heartbeat-
+oder Bounty-Review-Importe). AST-Tests in `test_bounty_review_automatic.py`.
+
+**Tests:** 45 in `test_bounty_review_automatic.py`:
+- Happy path: ACCEPT, REJECT, INDETERMINATE rejection (3)
+- Idempotency: duplicate ACCEPT/REJECT preserves reviewed_at + completed_at (2)
+- Conflict: different hash for completed submission (1)
+- Manual path: ACCEPT/REJECT via ManualReviewRequest (2)
+- Resubmission: new submission after REJECT, old history retained (1)
+- Public-boundary interruption: 4 ACCEPT + 4 REJECT Grenzen (8)
+- Failure modes: conflicting review, fulfilled-under-other-eval, REJECT against
+  fulfilled, bounty done for other submission, no-journal, torn temp file,
+  contract contradiction after complete, bounty contradiction after complete,
+  REJECT criteria-match interrupt, fulfilled no-history, fulfilled wrong
+  evaluator version, extra/missing review fields (14)
+- Timestamp validation: negative/bool reviewed_at, NaN/Inf matcher reject,
+  negative journal created_at, boolean journal updated_at, negative journal
+  completed_at, completed_at < created_at, missing journal completed_at (9)
+- AST authority boundaries (5)
+
+Suite: 494/494. mypy grün (20 files), ruff grün, ruff format grün.

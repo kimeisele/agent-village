@@ -1,77 +1,89 @@
-"""
-Agent Village — Bounty Submission & Review Gate
-=================================================
-Closes the loop opened by village/worker.py's WorkResult (docs/research/
-AGENT_LOOP_WORKER_02.md): a worker execution's output is submitted
-evidence, never an authoritative completion. This module is the ONLY
-place a bounty may move `claimed -> submitted -> done`, and the ONLY
-place a `VillageContract` may be `fulfill()`ed as a result of worker
-output -- neither `village/worker.py` nor `village/interpreter.py` can
-reach this module (SPEC.md §A.5, enforced via AST inspection,
-tests/test_worker_no_write_authority.py).
+"""Agent Village — Bounty Submission & Review Gate.
 
-Lifecycle (minimal review state adapted from docs/research/
-NIGHTFORGE_DESIGN_NOTE_01.md's ticket state machine, per docs/BEFUND.md
-§32): `open -> claimed -> submitted -> done`. `village/heartbeat.py::
-bounty_complete()` can no longer move a bounty directly from `claimed`
-to `done` -- see its own docstring.
+bounty_review() is the sole terminal authority for deterministic
+and manual review.  The automatic path uses an atomic journal commit
+followed by idempotent projections (review, contract, bounty).
 
-No reputation tiers, no automatic LLM reviewer, no multi-reviewer
-quorum, no appeals -- a review decision here is made by an explicit,
-human-authorized caller (or a future, separately-designed automation),
-never by the cognitive worker itself.
+Journal stages: decided → complete  (or failed_closed on contradiction)
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import village.heartbeat as heartbeat
 from village.contracts import (
     ContractState,
+    VillageContract,
     canonical_json_dumps,
     compute_review_policy_hash,
 )
-from village.heartbeat import _contract_id_for, _load, _load_contract, _save, _save_contract
-from village.submission_bindings import validate_submission_bindings  # noqa: F401 — re-exported
+from village.evaluator import EvalResult
+from village.final_evaluation import FinalEvaluation, ReviewDecision, validate_final_evaluation
+from village.heartbeat import _contract_id_for, _load, _load_contract, _save_contract
+from village.submission_bindings import validate_submission_bindings  # noqa: F401
 from village.work_result import WorkResult, WorkResultStatus
-
-# NOTE: `heartbeat.BOUNTIES` is accessed via qualified attribute lookup
-# throughout this module, deliberately NOT `from village.heartbeat import
-# BOUNTIES` -- a plain value import would snapshot the path at import
-# time, so a test's `monkeypatch.setattr(heartbeat, "BOUNTIES", ...)`
-# would silently not apply here (a real bug caught while writing
-# tests/test_bounty_review.py -- every test failed with a mysterious
-# None until this was traced back to the stale binding). `_load`/`_save`/
-# `_load_contract`/`_save_contract`/`_contract_id_for` are plain
-# functions, not values -- importing them by name is safe, they resolve
-# `heartbeat.BOUNTIES`/`heartbeat.CONTRACTS` dynamically inside
-# heartbeat.py's own namespace every time they run.
 
 DIR = Path("data/village")
 SUBMISSIONS = DIR / "bounty_submissions.json"
+FINALIZATION_JOURNAL = DIR / "finalization_journal.json"
+
+# ── Atomic persistence ────────────────────────────────────────────────────
+
+
+def _atomic_save_json(path: Path, data: dict[str, Any]) -> None:
+    """Write *data* atomically: temp file → fsync → os.replace → fsync dir."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.tmp{os.getpid()}")
+    raw = canonical_json_dumps(data).encode("utf-8")
+    try:
+        with open(tmp, "wb") as f:
+            f.write(raw)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        # Clean up temp file on failure where safe
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        raise
+    # Best-effort directory sync (non-fatal)
+    try:
+        fd = os.open(str(path.parent), os.O_RDONLY)
+        os.fsync(fd)
+        os.close(fd)
+    except OSError:
+        pass
+
+
+# ── Manual review request ─────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ManualReviewRequest:
+    bounty_id: str
+    submission_id: str
+    reviewer_actor_id: str
+    decision: ReviewDecision  # ACCEPT or REJECT only
+    evidence: dict[str, Any] | None = None
+
+
+# ── Safe evidence ─────────────────────────────────────────────────────────
 
 _EVIDENCE_BANNED_KEY_SUBSTRINGS = ("api_key", "secret", "authorization", "bearer", "raw", "token")
 _EVIDENCE_MAX_STRING_LEN = 4_000
-
-# Kim's PR #15 review, Blocker 2: key-based filtering alone doesn't stop
-# a model from echoing a secret-shaped VALUE back inside an otherwise
-# innocuously-named field (e.g. evidence["notes"] containing a stray
-# "sk-..." token). These patterns are checked against every string
-# value, not just ones under a suspicious key, and redacted in place --
-# never dropped silently, so a reviewer can see redaction happened.
 _SECRET_VALUE_PATTERNS = (
     re.compile(r"sk-[A-Za-z0-9_-]{10,}"),
     re.compile(r"[Bb]earer\s+[A-Za-z0-9._-]{10,}"),
-    # "Authorization: <scheme> <token>" -- consumes up to a few
-    # whitespace-separated tokens after the colon (covers "Basic
-    # <base64>", "Bearer <token>", etc.), not just the first one (a real
-    # bug found in testing: `\S+` alone left the actual credential
-    # token exposed right after a redacted scheme word).
     re.compile(r"[Aa]uthorization\s*:\s*\S+(?:\s+\S+){0,3}"),
 )
 _REDACTED = "[REDACTED]"
@@ -84,15 +96,6 @@ def _redact_secret_patterns(value: str) -> str:
 
 
 def _safe_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
-    """Defense in depth before persisting evidence as part of a bounty
-    submission: strips any KEY that looks credential-shaped, redacts any
-    string VALUE that matches a known secret pattern regardless of its
-    key, and caps string length. `WorkResult.evidence` for a SUCCEEDED
-    result only ever contains `{target_file, instruction, phase_log}`
-    today (no raw provider payload is ever attached on success -- see
-    village/worker.py), but this normalizer does not trust that by
-    convention alone; it re-checks structurally every time."""
-
     def _clean(value: Any) -> Any:
         if isinstance(value, dict):
             return {
@@ -113,6 +116,9 @@ def _safe_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(result, dict):
         raise ValueError(f"_safe_evidence: expected dict result, got {type(result).__name__}")
     return result
+
+
+# ── Submission helpers ────────────────────────────────────────────────────
 
 
 def _find_bounty(board: dict[str, Any], bounty_id: str) -> dict[str, Any] | None:
@@ -137,13 +143,6 @@ def _get_submission(submission_id: str) -> dict[str, Any] | None:
 
 
 def _next_submission_id(bounty_id: str, execution_id: str) -> str:
-    """Always returns a fresh, never-before-used submission id (docs/
-    research/BOUNTY_REVIEW_GATE_01.md Blocker 1). The common case (an
-    execution submitted for the first time) keeps the plain
-    `submission:<bounty_id>:<execution_id>` form; if that id is somehow
-    already taken (the same execution resubmitted after a reject, or a
-    defensive edge case), a numbered revision suffix is used instead --
-    the previous record, and its review if any, is never overwritten."""
     store = _load_submissions()
     submissions = store.get("submissions", {})
     base = f"submission:{bounty_id}:{execution_id}"
@@ -156,72 +155,35 @@ def _next_submission_id(bounty_id: str, execution_id: str) -> str:
 
 
 def _insert_submission(submission: dict[str, Any]) -> None:
-    """Immutable insert: refuses to overwrite an existing submission_id.
-    The ONLY way a new submission record enters storage -- callers must
-    obtain a guaranteed-fresh id from `_next_submission_id()` first, and
-    this function double-checks it at the storage layer, so a caller bug
-    elsewhere can't silently destroy audit history."""
     store = _load_submissions()
     submissions = store.get("submissions", {})
     if submission["submission_id"] in submissions:
-        raise RuntimeError(
-            f"submission {submission['submission_id']!r} already exists -- "
-            "audit records are immutable; this should be unreachable"
-        )
+        raise RuntimeError(f"submission {submission['submission_id']!r} already exists")
     submissions[submission["submission_id"]] = submission
     store["submissions"] = submissions
-    _save(SUBMISSIONS, store)
+    _atomic_save_json(SUBMISSIONS, store)
 
 
 def _attach_review(submission_id: str, review_record: dict[str, Any]) -> dict[str, Any]:
-    """Attach a review verdict to an existing submission -- the one
-    legitimate in-place update this module makes, and only once: refuses
-    if the submission already has a review (defense in depth on top of
-    the status-based gating in `bounty_review()`, which should already
-    make a double-review unreachable)."""
     store = _load_submissions()
     submissions = store.get("submissions", {})
     existing = submissions.get(submission_id)
     if existing is None:
         raise KeyError(f"no submission {submission_id!r} to attach a review to")
     if existing.get("review") is not None:
-        raise RuntimeError(f"submission {submission_id!r} was already reviewed -- refusing to overwrite the review")
+        raise RuntimeError(f"submission {submission_id!r} was already reviewed")
     updated = dict(existing)
     updated["review"] = review_record
     submissions[submission_id] = updated
     store["submissions"] = submissions
-    _save(SUBMISSIONS, store)
+    _atomic_save_json(SUBMISSIONS, store)
     return updated
 
 
-# ── Submission ────────────────────────────────────────────────────────────
+# ── Bounty submission ─────────────────────────────────────────────────────
+
+
 def bounty_submit(bounty_id: str, actor_id: str, work_result: WorkResult) -> dict[str, Any] | None:
-    """Submit a worker's WorkResult as evidence for a claimed bounty.
-
-    Never marks the bounty `done`, never calls `contract.fulfill()` --
-    only `bounty_review(..., decision="accept")` may do either. All
-    validation happens BEFORE any file write (atomicity: an invalid
-    submission leaves `bounties.json`/`contracts.json`/
-    `bounty_submissions.json` completely untouched, not partially
-    updated).
-
-    Rejected (returns `None`, same semantics as "not found") when:
-    - the bounty doesn't exist or isn't `claimed`,
-    - `actor_id` doesn't match the bounty's `claimed_by`,
-    - `work_result.status` isn't `SUCCEEDED` (a FAILED/INVALID_OUTPUT/
-      PROVIDER_ERROR/BUDGET_EXCEEDED result is never submittable -- it
-      isn't a real work result, per docs/research/
-      AGENT_LOOP_WORKER_02.md's own "not just a successful HTTP call"
-      criterion),
-    - `work_result.contract_id` doesn't match this bounty's own
-      deterministic contract id (wrong/foreign execution),
-    - no ACTIVE `VillageContract` exists for this bounty.
-
-    A duplicate submit call while the bounty is no longer `claimed`
-    (already `submitted`/`done`/`open`) is explicitly, deterministically
-    rejected -- not silently treated as idempotent success, per docs/
-    research/BOUNTY_REVIEW_GATE_01.md's atomicity note.
-    """
     board = _load(heartbeat.BOUNTIES)
     bounty = _find_bounty(board, bounty_id)
     if bounty is None or bounty.get("status") != "claimed":
@@ -230,18 +192,14 @@ def bounty_submit(bounty_id: str, actor_id: str, work_result: WorkResult) -> dic
         return None
     if work_result.status != WorkResultStatus.SUCCEEDED:
         return None
-
     contract_id = _contract_id_for(bounty_id)
     if work_result.contract_id != contract_id:
         return None
-
     contract = _load_contract(contract_id)
     if contract is None or contract.state != ContractState.ACTIVE:
         return None
 
-    # All validation above is read-only. First write happens here.
     submission_id = _next_submission_id(bounty_id, work_result.execution_id)
-    # Immutable bindings for deterministic review (Issue #34)
     output_hash = hashlib.sha256(
         canonical_json_dumps(work_result.output if work_result.output else {}).encode()
     ).hexdigest()
@@ -269,104 +227,686 @@ def bounty_submit(bounty_id: str, actor_id: str, work_result: WorkResult) -> dic
         "criterion_definition_hashes": criterion_hashes,
     }
     _insert_submission(submission)
-
     bounty["status"] = "submitted"
     bounty["current_submission_id"] = submission_id
-    _save(heartbeat.BOUNTIES, board)
-
+    _atomic_save_json(heartbeat.BOUNTIES, board)
     return submission
 
 
-# ── Review ────────────────────────────────────────────────────────────────
-_VALID_DECISIONS = ("accept", "reject")
+# ── Journal ───────────────────────────────────────────────────────────────
+
+_JOURNAL_DECIDED = "decided"
+_JOURNAL_COMPLETE = "complete"
+_JOURNAL_FAILED_CLOSED = "failed_closed"
+_VALID_STAGES = frozenset({_JOURNAL_DECIDED, _JOURNAL_COMPLETE, _JOURNAL_FAILED_CLOSED})
 
 
-def bounty_review(
-    bounty_id: str, reviewer_actor_id: str, decision: str, evidence: dict[str, Any] | None = None
-) -> dict[str, Any] | None:
-    """Record a review decision for a `submitted` bounty. The ONLY
-    function in this codebase that may set a bounty to `done` or call
-    `contract.fulfill()`.
+def _journal_key(submission_id: str) -> str:
+    return f"finalize:{submission_id}"
 
-    `decision` must be exactly `"accept"` or `"reject"` (raises
-    `ValueError` otherwise -- a programming error, not a data-driven
-    rejection, so it's raised rather than returning `None`).
 
-    **accept**: only proceeds if `contract.fulfill()` itself succeeds
-    (it raises internally if any `required` success criterion isn't
-    `met is True` -- see village/contracts.py -- which is exactly "don't
-    invent a pass for a non-automatically-checkable criterion": nothing
-    here ever sets `criterion.met`, so a required criterion that was
-    never explicitly marked `met=True` by some other, separate mechanism
-    blocks acceptance, deterministically, not a judgment call made here).
-    On success: review recorded on the submission (audit trail, not
-    overwritten), contract `FULFILLED`, bounty `done`.
+def _validate_journal_stage(entry: dict[str, Any]) -> bool:
+    """Validate that the journal stage is a known value."""
+    stage = entry.get("stage")
+    return isinstance(stage, str) and stage in _VALID_STAGES
 
-    **reject**: review recorded on the submission (still not
-    overwritten/deleted -- it remains as audit evidence). Bounty reset
-    to `claimed` (same `claimed_by`, so the same actor can resubmit).
-    Contract is NOT touched -- stays `ACTIVE`.
 
-    Rejected (returns `None`) when: the bounty doesn't exist or isn't
-    `submitted`, no contract exists, or no submission record is
-    associated with the bounty's current submission. A duplicate review
-    call after the bounty has already left `submitted` is explicitly,
-    deterministically rejected.
+def _validate_journal_bindings(entry: dict[str, Any], evaluation: FinalEvaluation) -> bool:
+    """Strictly verify ALL immutable decision bindings.
+
+    Required fields: submission_id, bounty_id, contract_id, contract_version,
+    evaluation_hash, decision, evaluator_version.
     """
-    if decision not in _VALID_DECISIONS:
-        raise ValueError(f"invalid decision: {decision!r}, must be one of {_VALID_DECISIONS}")
+    return (
+        isinstance(entry, dict)
+        and entry.get("submission_id") == evaluation.submission_id
+        and entry.get("bounty_id") == evaluation.bounty_id
+        and entry.get("contract_id") == evaluation.contract_id
+        and entry.get("contract_version") == evaluation.contract_version
+        and entry.get("evaluation_hash") == evaluation.evaluation_hash
+        and entry.get("decision") == evaluation.overall_decision.value
+        and entry.get("evaluator_version") == evaluation.evaluator_version
+    )
 
-    board = _load(heartbeat.BOUNTIES)
-    bounty = _find_bounty(board, bounty_id)
-    if bounty is None or bounty.get("status") != "submitted":
+
+def _write_journal_decided(evaluation: FinalEvaluation) -> dict[str, Any]:
+    """Atomically commit a 'decided' journal record.
+
+    Returns {} on conflict (caller must fail closed).  Returns existing
+    record on identical replay.
+    """
+    now = time.time()
+    record = {
+        "submission_id": evaluation.submission_id,
+        "bounty_id": evaluation.bounty_id,
+        "contract_id": evaluation.contract_id,
+        "contract_version": evaluation.contract_version,
+        "evaluation_hash": evaluation.evaluation_hash,
+        "decision": evaluation.overall_decision.value,
+        "evaluator_version": evaluation.evaluator_version,
+        "stage": _JOURNAL_DECIDED,
+        "created_at": now,
+        "updated_at": now,
+    }
+    journal = _load(FINALIZATION_JOURNAL)
+    jkey = _journal_key(evaluation.submission_id)
+    existing: dict[str, Any] | None = journal.get(jkey)
+
+    if existing is not None:
+        # Validate stage — malformed stage → failed_closed
+        if not _validate_journal_stage(existing):
+            existing["stage"] = _JOURNAL_FAILED_CLOSED
+            existing["updated_at"] = now
+            existing["diagnostic"] = "malformed_stage"
+            _atomic_save_json(FINALIZATION_JOURNAL, journal)
+            return {}
+        # Binding mismatch → failed_closed
+        if not _validate_journal_bindings(existing, evaluation):
+            existing["stage"] = _JOURNAL_FAILED_CLOSED
+            existing["updated_at"] = now
+            existing["diagnostic"] = "bindings_mismatch"
+            _atomic_save_json(FINALIZATION_JOURNAL, journal)
+            return {}
+        return existing  # already decided, identical replay
+
+    journal[jkey] = record
+    _atomic_save_json(FINALIZATION_JOURNAL, journal)
+    return record
+
+
+def _advance_journal_to(submission_id: str, stage: str, **extra: Any) -> None:
+    """Atomically advance journal to *stage*.
+
+    Sets ``completed_at`` exactly once on the transition to complete.
+    A duplicate identical call after complete is a no-op.
+    """
+    journal = _load(FINALIZATION_JOURNAL)
+    jkey = _journal_key(submission_id)
+    entry = journal.get(jkey)
+    if entry is None:
+        return
+    if entry.get("stage") == _JOURNAL_FAILED_CLOSED:
+        return
+    if entry.get("stage") == _JOURNAL_COMPLETE and stage == _JOURNAL_COMPLETE:
+        return  # duplicate complete — no-op
+    entry["stage"] = stage
+    entry["updated_at"] = time.time()
+    if stage == _JOURNAL_COMPLETE and "completed_at" not in entry:
+        entry["completed_at"] = time.time()
+    entry.update(extra)
+    _atomic_save_json(FINALIZATION_JOURNAL, journal)
+
+
+def _journal_fail_closed(submission_id: str, reason: str = "") -> None:
+    """Atomically transition journal to failed_closed.
+
+    Allowed from any stage including complete — when the completed
+    record's own projections have been corrupted, the journal must
+    record the failure rather than silently return None.
+    """
+    journal = _load(FINALIZATION_JOURNAL)
+    jkey = _journal_key(submission_id)
+    entry = journal.get(jkey)
+    if entry is None:
+        return
+    if entry.get("stage") == _JOURNAL_FAILED_CLOSED:
+        return  # already failed
+    entry["stage"] = _JOURNAL_FAILED_CLOSED
+    entry["updated_at"] = time.time()
+    if reason:
+        entry["diagnostic"] = reason[:256]
+    _atomic_save_json(FINALIZATION_JOURNAL, journal)
+
+
+# ── Timestamp validation ──────────────────────────────────────────────────
+
+
+def _is_finite_timestamp(value: Any) -> bool:
+    """Return True if *value* is a finite, non-negative, non-boolean numeric timestamp."""
+    if not isinstance(value, (int, float)):
+        return False
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, float):
+        import math
+
+        if math.isnan(value) or math.isinf(value):
+            return False
+    return value >= 0
+
+
+# ── Review matching ───────────────────────────────────────────────────────
+
+_REVIEW_CANONICAL_FIELDS = frozenset(
+    {
+        "review_kind",
+        "evaluation_hash",
+        "evaluator_version",
+        "decision",
+        "reason_codes",
+        "criteria_results",
+        "reviewed_at",
+    }
+)
+_CRITERION_RESULT_FIELDS = frozenset({"criterion_id", "result", "reason_code"})
+
+
+def _is_matching_deterministic_review(review: dict[str, Any], evaluation: FinalEvaluation) -> bool:
+    """Exact canonical field set and value comparison.
+
+    Required top-level fields: review_kind, evaluation_hash, evaluator_version,
+    decision, reason_codes, criteria_results, reviewed_at.
+
+    Each criterion-result entry must have exactly: criterion_id, result, reason_code.
+
+    Rejects extra fields, missing fields, NaN, +Inf, -Inf, booleans, negative values.
+    """
+    if not isinstance(review, dict):
+        return False
+    # Enforce exact top-level field set
+    if set(review.keys()) != _REVIEW_CANONICAL_FIELDS:
+        return False
+    if review.get("review_kind") != "deterministic":
+        return False
+    eh = review.get("evaluation_hash")
+    if not isinstance(eh, str) or not eh or eh != evaluation.evaluation_hash:
+        return False
+    if review.get("evaluator_version") != evaluation.evaluator_version:
+        return False
+    if review.get("decision") != evaluation.overall_decision.value:
+        return False
+    rc_stored = review.get("reason_codes")
+    if not isinstance(rc_stored, list) or list(evaluation.reason_codes) != rc_stored:
+        return False
+    cr_stored = review.get("criteria_results")
+    if not isinstance(cr_stored, list):
+        return False
+    cr_eval = [
+        {"criterion_id": cr.criterion_id, "result": cr.result.value, "reason_code": cr.reason_code}
+        for cr in evaluation.criteria_results
+    ]
+    if len(cr_stored) != len(cr_eval):
+        return False
+    for s, e in zip(cr_stored, cr_eval):
+        if not isinstance(s, dict):
+            return False
+        if set(s.keys()) != _CRITERION_RESULT_FIELDS:
+            return False
+        if (
+            s.get("criterion_id") != e["criterion_id"]
+            or s.get("result") != e["result"]
+            or s.get("reason_code") != e["reason_code"]
+        ):
+            return False
+    ra = review.get("reviewed_at")
+    if not _is_finite_timestamp(ra):
+        return False
+    return True
+
+
+def _build_automatic_review_record(evaluation: FinalEvaluation) -> dict[str, Any]:
+    return {
+        "review_kind": "deterministic",
+        "evaluation_hash": evaluation.evaluation_hash,
+        "evaluator_version": evaluation.evaluator_version,
+        "decision": evaluation.overall_decision.value,
+        "reason_codes": list(evaluation.reason_codes),
+        "criteria_results": [
+            {"criterion_id": cr.criterion_id, "result": cr.result.value, "reason_code": cr.reason_code}
+            for cr in evaluation.criteria_results
+        ],
+        "reviewed_at": time.time(),
+    }
+
+
+# ── Criterion application ─────────────────────────────────────────────────
+
+
+def _apply_criteria_results(contract: VillageContract, evaluation: FinalEvaluation) -> None:
+    for cr in evaluation.criteria_results:
+        for sc in contract.success_criteria:
+            if sc.criterion_id == cr.criterion_id:
+                if cr.result == EvalResult.PASS:
+                    sc.met = True
+                elif cr.result == EvalResult.FAIL:
+                    sc.met = False
+                else:
+                    sc.met = None
+                break
+
+
+def _criteria_match(contract: VillageContract, evaluation: FinalEvaluation) -> bool:
+    if len(contract.success_criteria) != len(evaluation.criteria_results):
+        return False
+    seen: set[str] = set()
+    for cr in evaluation.criteria_results:
+        if cr.criterion_id in seen:
+            return False
+        seen.add(cr.criterion_id)
+        found = False
+        for sc in contract.success_criteria:
+            if sc.criterion_id == cr.criterion_id:
+                found = True
+                expected = True if cr.result == EvalResult.PASS else False if cr.result == EvalResult.FAIL else None
+                if sc.met is not expected:
+                    return False
+                break
+        if not found:
+            return False
+    return True
+
+
+# ── Contract evaluation history ───────────────────────────────────────────
+
+_AUTO_EVALS_KEY = "auto_evaluations"
+_AUTO_EVAL_ENTRY_FIELDS = frozenset({"submission_id", "evaluation_hash", "decision", "evaluator_version"})
+
+
+def _get_eval_history(contract: VillageContract) -> dict[str, dict[str, Any]]:
+    """Get the submission-keyed evaluation history map."""
+    hist = contract.extra.get(_AUTO_EVALS_KEY)
+    if isinstance(hist, dict):
+        return hist
+    return {}
+
+
+def _record_eval_history(contract: VillageContract, evaluation: FinalEvaluation) -> str:
+    """Record an automatic evaluation in contract history.
+
+    Returns:
+        ``"recorded"`` — new entry appended.
+        ``"matched"`` — exact match, no-op.
+        ``"conflict"`` — same submission, different evaluation → caller must fail closed.
+    """
+    hist = _get_eval_history(contract)
+    sid = evaluation.submission_id
+    entry = {
+        "submission_id": sid,
+        "evaluation_hash": evaluation.evaluation_hash,
+        "decision": evaluation.overall_decision.value,
+        "evaluator_version": evaluation.evaluator_version,
+    }
+    existing = hist.get(sid)
+    if existing is None:
+        hist[sid] = entry
+        contract.extra[_AUTO_EVALS_KEY] = hist
+        return "recorded"
+    if not isinstance(existing, dict) or set(existing.keys()) != _AUTO_EVAL_ENTRY_FIELDS:
+        return "conflict"
+    if (
+        existing.get("evaluation_hash") == entry["evaluation_hash"]
+        and existing.get("decision") == entry["decision"]
+        and existing.get("evaluator_version") == entry["evaluator_version"]
+    ):
+        return "matched"
+    return "conflict"
+
+
+def _eval_history_has_submission(contract: VillageContract, submission_id: str) -> bool:
+    """Check whether *submission_id* has an entry in evaluation history."""
+    hist = _get_eval_history(contract)
+    return submission_id in hist
+
+
+def _eval_history_matches(contract: VillageContract, evaluation: FinalEvaluation) -> bool:
+    """Check that the evaluation history contains an exact match for this evaluation.
+
+    Requires all four canonical fields: submission_id, evaluation_hash,
+    decision, evaluator_version.  The entry must have exactly those fields.
+    """
+    hist = _get_eval_history(contract)
+    entry = hist.get(evaluation.submission_id)
+    if entry is None:
+        return False
+    if not isinstance(entry, dict):
+        return False
+    if set(entry.keys()) != _AUTO_EVAL_ENTRY_FIELDS:
+        return False
+    return (
+        entry.get("submission_id") == evaluation.submission_id
+        and entry.get("evaluation_hash") == evaluation.evaluation_hash
+        and entry.get("decision") == evaluation.overall_decision.value
+        and entry.get("evaluator_version") == evaluation.evaluator_version
+    )
+
+
+# ── Bounty finalization identity ──────────────────────────────────────────
+
+_BOUNTY_FINALIZED_KEY = "_finalized_by"
+
+
+def _set_bounty_finalization(bounty: dict[str, Any], evaluation: FinalEvaluation) -> None:
+    """Persist finalization identity on the bounty record."""
+    bounty[_BOUNTY_FINALIZED_KEY] = {
+        "submission_id": evaluation.submission_id,
+        "evaluation_hash": evaluation.evaluation_hash,
+        "decision": evaluation.overall_decision.value,
+    }
+
+
+def _bounty_finalization_matches(bounty: dict[str, Any], evaluation: FinalEvaluation) -> bool:
+    """Check whether the bounty's finalization identity matches *evaluation*."""
+    fb = bounty.get(_BOUNTY_FINALIZED_KEY)
+    if not isinstance(fb, dict):
+        return False
+    return (
+        fb.get("submission_id") == evaluation.submission_id
+        and fb.get("evaluation_hash") == evaluation.evaluation_hash
+        and fb.get("decision") == evaluation.overall_decision.value
+    )
+
+
+# ── Complete-record verification ──────────────────────────────────────────
+
+
+def _verify_complete_projections(
+    submission: dict[str, Any] | None,
+    contract: VillageContract,
+    bounty: dict[str, Any],
+    evaluation: FinalEvaluation,
+    journal_entry: dict[str, Any],
+) -> bool:
+    """Verify ALL projections for a journal at 'complete' stage.
+
+    Every contradiction returns False → caller must fail closed.
+    """
+    if submission is None:
+        return False
+    # Review must be present and deterministic-matching
+    review = submission.get("review")
+    if not isinstance(review, dict):
+        return False
+    if not _is_matching_deterministic_review(review, evaluation):
+        return False
+    # Contract state
+    if evaluation.overall_decision == ReviewDecision.ACCEPT:
+        if contract.state != ContractState.FULFILLED:
+            return False
+    else:
+        if contract.state != ContractState.ACTIVE:
+            return False
+    # Criteria must match
+    if not _criteria_match(contract, evaluation):
+        return False
+    # Evaluation history must contain exact match
+    if not _eval_history_matches(contract, evaluation):
+        return False
+    # Bounty state
+    expected_status = "done" if evaluation.overall_decision == ReviewDecision.ACCEPT else "claimed"
+    if bounty.get("status") != expected_status:
+        return False
+    if bounty.get("current_submission_id") != evaluation.submission_id:
+        return False
+    if not _bounty_finalization_matches(bounty, evaluation):
+        return False
+    # Timestamp sanity — bounty and review
+    if evaluation.overall_decision == ReviewDecision.ACCEPT:
+        if not _is_finite_timestamp(bounty.get("completed_at")):
+            return False
+    if not _is_finite_timestamp(review.get("reviewed_at")):
+        return False
+    # Journal timestamp validation
+    if not isinstance(journal_entry, dict):
+        return False
+    created_at = journal_entry.get("created_at")
+    updated_at = journal_entry.get("updated_at")
+    completed_at = journal_entry.get("completed_at")
+    if not _is_finite_timestamp(created_at):
+        return False
+    if not _is_finite_timestamp(updated_at):
+        return False
+    if not _is_finite_timestamp(completed_at):
+        return False
+    assert isinstance(created_at, (int, float))
+    assert isinstance(updated_at, (int, float))
+    assert isinstance(completed_at, (int, float))
+    if created_at > updated_at:
+        return False
+    if created_at > completed_at:
+        return False
+    return True
+
+
+# ── Automatic review (commit-and-replay) ──────────────────────────────────
+
+
+def _bounty_review_automatic(evaluation: FinalEvaluation) -> dict[str, Any] | None:
+    if evaluation.overall_decision == ReviewDecision.INDETERMINATE:
         return None
 
-    contract_id = _contract_id_for(bounty_id)
-    contract = _load_contract(contract_id)
+    # ── Load canonical state ──
+    board = _load(heartbeat.BOUNTIES)
+    bounty = _find_bounty(board, evaluation.bounty_id)
+    if bounty is None:
+        return None
+    contract = _load_contract(_contract_id_for(evaluation.bounty_id))
+    if contract is None:
+        return None
+    submission = _get_submission(evaluation.submission_id)
+    if submission is None:
+        return None
+
+    # Validate FinalEvaluation against canonical state
+    reasons = validate_final_evaluation(evaluation, submission, contract)
+    if reasons:
+        return None
+
+    current_sid = bounty.get("current_submission_id")
+    if not isinstance(current_sid, str) or current_sid != evaluation.submission_id:
+        return None
+
+    # ── Check journal ──
+    journal = _load(FINALIZATION_JOURNAL)
+    jkey = _journal_key(evaluation.submission_id)
+    journal_entry = journal.get(jkey)
+
+    if journal_entry is not None:
+        # Validate stage
+        if not _validate_journal_stage(journal_entry):
+            _journal_fail_closed(evaluation.submission_id, "malformed_stage")
+            return None
+        # Validate bindings — if mismatch against non-complete, fail closed.
+        # If complete: the existing record is valid; reject the new evaluation
+        # without modifying the journal.
+        if not _validate_journal_bindings(journal_entry, evaluation):
+            stage = journal_entry.get("stage", "")
+            if stage != _JOURNAL_COMPLETE:
+                _journal_fail_closed(evaluation.submission_id, "bindings_mismatch")
+            return None
+        stage = journal_entry.get("stage", "")
+        if stage == _JOURNAL_FAILED_CLOSED:
+            return None
+        if stage == _JOURNAL_COMPLETE:
+            # Verify ALL projections; never return cached success on contradiction
+            if _verify_complete_projections(submission, contract, bounty, evaluation, journal_entry):
+                existing_review = submission.get("review")
+                if isinstance(existing_review, dict):
+                    return {"bounty": dict(bounty), "review": existing_review}
+            # Projections corrupted → fail closed
+            _journal_fail_closed(evaluation.submission_id, "complete_contradiction")
+            return None
+        # decided — resume projections below
+    else:
+        # Fresh evaluation: validate preconditions
+        if bounty.get("status") != "submitted":
+            return None
+        if contract.state != ContractState.ACTIVE:
+            return None
+
+        # Commit decided journal (atomic)
+        record = _write_journal_decided(evaluation)
+        if not record:
+            return None  # conflict during decide → caller already failed closed
+
+    # ── Replay projections ──
+
+    # Review projection
+    existing_review = submission.get("review")
+    if existing_review is not None:
+        if not _is_matching_deterministic_review(existing_review, evaluation):
+            _journal_fail_closed(evaluation.submission_id, "conflicting_review")
+            return None
+        review_record = dict(existing_review)  # reuse, preserve reviewed_at
+    else:
+        review_record = _build_automatic_review_record(evaluation)
+        try:
+            _attach_review(evaluation.submission_id, review_record)
+        except RuntimeError:
+            _journal_fail_closed(evaluation.submission_id, "review_already_attached")
+            return None
+
+    # Contract projection
+    if evaluation.overall_decision == ReviewDecision.ACCEPT:
+        if contract.state == ContractState.FULFILLED:
+            # Already fulfilled — verify. Never create a missing history entry.
+            if not _eval_history_matches(contract, evaluation):
+                _journal_fail_closed(evaluation.submission_id, "contract_fulfilled_different_eval")
+                return None
+            if not _criteria_match(contract, evaluation):
+                _journal_fail_closed(evaluation.submission_id, "contract_criteria_mismatch")
+                return None
+        elif contract.state == ContractState.ACTIVE:
+            hist_result = _record_eval_history(contract, evaluation)
+            if hist_result == "conflict":
+                _journal_fail_closed(evaluation.submission_id, "eval_history_conflict")
+                return None
+            if not _criteria_match(contract, evaluation):
+                _apply_criteria_results(contract, evaluation)
+            try:
+                contract.fulfill()
+            except ValueError:
+                _journal_fail_closed(evaluation.submission_id, "fulfill_refused")
+                return None
+            _atomic_save_json(
+                heartbeat.CONTRACTS,
+                _load_contract_store_for_save(contract),
+            )
+        else:
+            _journal_fail_closed(evaluation.submission_id, "contract_incompatible_state")
+            return None
+    else:  # REJECT
+        if contract.state != ContractState.ACTIVE:
+            _journal_fail_closed(evaluation.submission_id, "contract_not_active_for_reject")
+            return None
+        hist_result = _record_eval_history(contract, evaluation)
+        if hist_result == "conflict":
+            _journal_fail_closed(evaluation.submission_id, "eval_history_conflict")
+            return None
+        if not _criteria_match(contract, evaluation):
+            _apply_criteria_results(contract, evaluation)
+        _atomic_save_json(
+            heartbeat.CONTRACTS,
+            _load_contract_store_for_save(contract),
+        )
+
+    # Bounty projection
+    if evaluation.overall_decision == ReviewDecision.ACCEPT:
+        if bounty.get("status") == "done":
+            if not _bounty_finalization_matches(bounty, evaluation):
+                _journal_fail_closed(evaluation.submission_id, "bounty_done_different_eval")
+                return None
+            # Already done with matching identity — no-op
+        elif bounty.get("status") == "submitted":
+            bounty["status"] = "done"
+            bounty["completed_at"] = time.time()
+            _set_bounty_finalization(bounty, evaluation)
+            _atomic_save_json(heartbeat.BOUNTIES, board)
+        else:
+            _journal_fail_closed(evaluation.submission_id, "bounty_incompatible_state")
+            return None
+    else:  # REJECT
+        if bounty.get("status") == "claimed":
+            if not _bounty_finalization_matches(bounty, evaluation):
+                _journal_fail_closed(evaluation.submission_id, "bounty_claimed_different_eval")
+                return None
+            # Already claimed with matching identity — no-op
+        elif bounty.get("status") == "submitted":
+            bounty["status"] = "claimed"
+            _set_bounty_finalization(bounty, evaluation)
+            _atomic_save_json(heartbeat.BOUNTIES, board)
+        elif bounty.get("status") == "done":
+            _journal_fail_closed(evaluation.submission_id, "bounty_done_on_reject")
+            return None
+        else:
+            _journal_fail_closed(evaluation.submission_id, "bounty_incompatible_state")
+            return None
+
+    # Complete (atomic)
+    _advance_journal_to(evaluation.submission_id, _JOURNAL_COMPLETE)
+
+    return {"bounty": dict(bounty), "review": review_record}
+
+
+def _load_contract_store_for_save(contract: VillageContract) -> dict[str, Any]:
+    """Load the contract store and merge in *contract*.
+
+    Needed because _save_contract uses _save(CONTRACTS, store) which does
+    temp-file replace (also atomic).  We duplicate the merge logic here so
+    we can use _atomic_save_json directly.
+    """
+    store = _load(heartbeat.CONTRACTS)
+    contracts = store.get("contracts", {})
+    if not isinstance(contracts, dict):
+        contracts = {}
+    contracts[contract.contract_id] = contract.to_dict()
+    store["contracts"] = contracts
+    return store
+
+
+# ── Manual review ─────────────────────────────────────────────────────────
+
+
+def _bounty_review_manual(request: ManualReviewRequest) -> dict[str, Any] | None:
+    if request.decision not in (ReviewDecision.ACCEPT, ReviewDecision.REJECT):
+        raise ValueError(f"invalid decision: {request.decision!r}, must be ACCEPT or REJECT")
+
+    board = _load(heartbeat.BOUNTIES)
+    bounty = _find_bounty(board, request.bounty_id)
+    if bounty is None or bounty.get("status") != "submitted":
+        return None
+    if bounty.get("current_submission_id") != request.submission_id:
+        return None
+
+    contract = _load_contract(_contract_id_for(request.bounty_id))
     if contract is None:
         return None
 
-    submission_id_raw = bounty.get("current_submission_id")
-    if not isinstance(submission_id_raw, str) or not submission_id_raw:
-        return None
-    submission_id: str = submission_id_raw
-    submission = _get_submission(submission_id)
+    submission = _get_submission(request.submission_id)
     if submission is None:
         return None
 
     review_record = {
-        "reviewer_actor_id": reviewer_actor_id,
-        "decision": decision,
-        "evidence": _safe_evidence(evidence or {}),
+        "reviewer_actor_id": request.reviewer_actor_id,
+        "decision": request.decision.value,
+        "evidence": _safe_evidence(request.evidence or {}),
         "reviewed_at": time.time(),
     }
 
-    if decision == "reject":
-        # Contract untouched -- validation above is the only
-        # precondition. Submission (with its review outcome attached via
-        # _attach_review(), an in-place update of THIS record only) is
-        # preserved, not deleted or overwritten by a later resubmit --
-        # _next_submission_id() guarantees the next submit() gets its own
-        # fresh id.
-        _attach_review(str(submission_id), review_record)
-
+    if request.decision == ReviewDecision.REJECT:
+        _attach_review(request.submission_id, review_record)
         bounty["status"] = "claimed"
-        _save(heartbeat.BOUNTIES, board)
+        _atomic_save_json(heartbeat.BOUNTIES, board)
         return {"bounty": dict(bounty), "review": review_record}
 
-    # accept: contract.fulfill() itself enforces "no unmet/unknown
-    # required criterion" -- see docstring. Raises ValueError, no
-    # mutation, if it can't honestly fulfill.
+    # accept
     try:
         contract.fulfill()
     except ValueError:
         return None
-
-    _attach_review(str(submission_id), review_record)
+    _attach_review(request.submission_id, review_record)
     _save_contract(contract)
-
     bounty["status"] = "done"
     bounty["completed_at"] = time.time()
-    _save(heartbeat.BOUNTIES, board)
-
+    _atomic_save_json(heartbeat.BOUNTIES, board)
     return {"bounty": dict(bounty), "review": review_record}
+
+
+# ── Public entry point ────────────────────────────────────────────────────
+
+
+def bounty_review(
+    review_input: FinalEvaluation | ManualReviewRequest,
+) -> dict[str, Any] | None:
+    if isinstance(review_input, ManualReviewRequest):
+        return _bounty_review_manual(review_input)
+    return _bounty_review_automatic(review_input)

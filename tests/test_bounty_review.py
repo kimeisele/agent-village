@@ -13,7 +13,9 @@ import pytest
 
 import village.bounty_review as br
 import village.heartbeat as hb
+from village.bounty_review import ManualReviewRequest
 from village.contracts import ContractState
+from village.final_evaluation import ReviewDecision
 from village.work_result import WorkResult, WorkResultStatus
 
 
@@ -222,8 +224,15 @@ def test_already_submitted_bounty_rejects_a_second_submit(monkeypatch, tmp_path)
 def test_done_bounty_is_not_submittable(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     _claim("SomeAgent")
-    br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
-    br.bounty_review("b001", "reviewer-1", "accept")
+    sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
+    br.bounty_review(
+        ManualReviewRequest(
+            bounty_id="b001",
+            submission_id=sub["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.ACCEPT,
+        )
+    )
     assert hb._load(hb.BOUNTIES)["bounties"][0]["status"] == "done"
 
     result = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result(execution_id="exec-late"))
@@ -285,9 +294,16 @@ def test_submission_survives_json_roundtrip(monkeypatch, tmp_path):
 def test_accept_moves_submitted_to_done(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     _claim("SomeAgent")
-    br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
+    sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
 
-    result = br.bounty_review("b001", "reviewer-1", "accept")
+    result = br.bounty_review(
+        ManualReviewRequest(
+            bounty_id="b001",
+            submission_id=sub["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.ACCEPT,
+        )
+    )
 
     assert result is not None
     assert result["bounty"]["status"] == "done"
@@ -296,10 +312,17 @@ def test_accept_moves_submitted_to_done(monkeypatch, tmp_path):
 def test_accept_fulfills_the_contract_only_now(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     _claim("SomeAgent")
-    br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
+    sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
     assert hb._load_contract("contract:b001:1").state == ContractState.ACTIVE  # not yet
 
-    br.bounty_review("b001", "reviewer-1", "accept")
+    br.bounty_review(
+        ManualReviewRequest(
+            bounty_id="b001",
+            submission_id=sub["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.ACCEPT,
+        )
+    )
 
     assert hb._load_contract("contract:b001:1").state == ContractState.FULFILLED
 
@@ -309,7 +332,14 @@ def test_accept_persists_reviewer_and_decision(monkeypatch, tmp_path):
     _claim("SomeAgent")
     submission = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
 
-    result = br.bounty_review("b001", "reviewer-42", "accept")
+    result = br.bounty_review(
+        ManualReviewRequest(
+            bounty_id="b001",
+            submission_id=submission["submission_id"],
+            reviewer_actor_id="reviewer-42",
+            decision=ReviewDecision.ACCEPT,
+        )
+    )
 
     assert result["review"]["reviewer_actor_id"] == "reviewer-42"
     assert result["review"]["decision"] == "accept"
@@ -324,9 +354,16 @@ def test_accept_with_no_success_criteria_fulfills_trivially(monkeypatch, tmp_pat
     pre-review-gate bounty_complete() semantics exactly for this case."""
     _setup(monkeypatch, tmp_path)
     _claim("SomeAgent")
-    br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
+    sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
 
-    result = br.bounty_review("b001", "reviewer-1", "accept")
+    result = br.bounty_review(
+        ManualReviewRequest(
+            bounty_id="b001",
+            submission_id=sub["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.ACCEPT,
+        )
+    )
     assert result is not None
 
 
@@ -342,9 +379,16 @@ def test_accept_with_unmet_required_criterion_is_refused(monkeypatch, tmp_path):
     }
     hb._save(hb.BOUNTIES, board)
     _claim("SomeAgent")
-    br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
+    sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
 
-    result = br.bounty_review("b001", "reviewer-1", "accept")
+    result = br.bounty_review(
+        ManualReviewRequest(
+            bounty_id="b001",
+            submission_id=sub["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.ACCEPT,
+        )
+    )
 
     assert result is None
     assert hb._load(hb.BOUNTIES)["bounties"][0]["status"] == "submitted"  # unchanged
@@ -359,13 +403,20 @@ def test_accept_with_met_required_criterion_fulfills_contract(monkeypatch, tmp_p
     }
     hb._save(hb.BOUNTIES, board)
     _claim("SomeAgent")
-    br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
+    sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
 
     contract = hb._load_contract("contract:b001:1")
     contract.success_criteria[0].met = True
     hb._save_contract(contract)
 
-    result = br.bounty_review("b001", "reviewer-1", "accept")
+    result = br.bounty_review(
+        ManualReviewRequest(
+            bounty_id="b001",
+            submission_id=sub["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.ACCEPT,
+        )
+    )
 
     assert result is not None
     assert hb._load_contract("contract:b001:1").state == ContractState.FULFILLED
@@ -377,9 +428,17 @@ def test_accept_with_met_required_criterion_fulfills_contract(monkeypatch, tmp_p
 def test_reject_resets_bounty_to_claimed(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     _claim("SomeAgent")
-    br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
+    sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
 
-    result = br.bounty_review("b001", "reviewer-1", "reject", evidence={"reason": "missing coverage"})
+    result = br.bounty_review(
+        ManualReviewRequest(
+            bounty_id="b001",
+            submission_id=sub["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.REJECT,
+            evidence={"reason": "missing coverage"},
+        )
+    )
 
     assert result is not None
     assert result["bounty"]["status"] == "claimed"
@@ -389,9 +448,16 @@ def test_reject_resets_bounty_to_claimed(monkeypatch, tmp_path):
 def test_reject_leaves_contract_active(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     _claim("SomeAgent")
-    br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
+    sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
 
-    br.bounty_review("b001", "reviewer-1", "reject")
+    br.bounty_review(
+        ManualReviewRequest(
+            bounty_id="b001",
+            submission_id=sub["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.REJECT,
+        )
+    )
 
     assert hb._load_contract("contract:b001:1").state == ContractState.ACTIVE
 
@@ -401,7 +467,15 @@ def test_rejected_work_result_stays_in_audit_history(monkeypatch, tmp_path):
     _claim("SomeAgent")
     submission = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
 
-    br.bounty_review("b001", "reviewer-1", "reject", evidence={"reason": "not good enough"})
+    br.bounty_review(
+        ManualReviewRequest(
+            bounty_id="b001",
+            submission_id=submission["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.REJECT,
+            evidence={"reason": "not good enough"},
+        )
+    )
 
     stored = br._get_submission(submission["submission_id"])
     assert stored is not None  # not deleted
@@ -412,8 +486,15 @@ def test_rejected_work_result_stays_in_audit_history(monkeypatch, tmp_path):
 def test_resubmit_possible_after_reject(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     _claim("SomeAgent")
-    br.bounty_submit("b001", "SomeAgent", _succeeded_work_result(execution_id="exec-1"))
-    br.bounty_review("b001", "reviewer-1", "reject")
+    s1 = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result(execution_id="exec-1"))
+    br.bounty_review(
+        ManualReviewRequest(
+            bounty_id="b001",
+            submission_id=s1["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.REJECT,
+        )
+    )
 
     result = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result(execution_id="exec-2"))
 
@@ -430,27 +511,49 @@ def test_resubmit_possible_after_reject(monkeypatch, tmp_path):
 def test_invalid_decision_string_raises_value_error(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     _claim("SomeAgent")
-    br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
+    sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
 
     with pytest.raises(ValueError):
-        br.bounty_review("b001", "reviewer-1", "maybe")
+        br.bounty_review(
+            ManualReviewRequest(
+                bounty_id="b001", submission_id=sub["submission_id"], reviewer_actor_id="reviewer-1", decision="maybe"
+            )
+        )
 
 
 def test_review_on_non_submitted_bounty_is_rejected(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     _claim("SomeAgent")  # only "claimed", never submitted
 
-    result = br.bounty_review("b001", "reviewer-1", "accept")
+    result = br.bounty_review(
+        ManualReviewRequest(
+            bounty_id="b001", submission_id="no-op", reviewer_actor_id="reviewer-1", decision=ReviewDecision.ACCEPT
+        )
+    )
     assert result is None
 
 
 def test_duplicate_review_after_already_done_is_rejected(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     _claim("SomeAgent")
-    br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
-    br.bounty_review("b001", "reviewer-1", "accept")
+    sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
+    br.bounty_review(
+        ManualReviewRequest(
+            bounty_id="b001",
+            submission_id=sub["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.ACCEPT,
+        )
+    )
 
-    result = br.bounty_review("b001", "reviewer-1", "accept")  # duplicate call
+    result = br.bounty_review(
+        ManualReviewRequest(
+            bounty_id="b001",
+            submission_id=sub["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.ACCEPT,
+        )
+    )  # duplicate call
     assert result is None
 
 
@@ -478,7 +581,15 @@ def test_resubmit_of_the_same_execution_after_reject_does_not_overwrite_the_firs
     wr = _succeeded_work_result(execution_id="exec-1")
 
     first = br.bounty_submit("b001", "SomeAgent", wr)
-    br.bounty_review("b001", "reviewer-1", "reject", evidence={"reason": "not good enough"})
+    br.bounty_review(
+        ManualReviewRequest(
+            bounty_id="b001",
+            submission_id=first["submission_id"],
+            reviewer_actor_id="reviewer-1",
+            decision=ReviewDecision.REJECT,
+            evidence={"reason": "not good enough"},
+        )
+    )
 
     # Resubmit the SAME execution_id (e.g. a naive retry of the same
     # work_result object) after the reject.
@@ -541,8 +652,16 @@ def test_multiple_reject_resubmit_cycles_preserve_full_history(monkeypatch, tmp_
     wr = _succeeded_work_result(execution_id="exec-1")
 
     for i in range(3):
-        br.bounty_submit("b001", "SomeAgent", wr)
-        br.bounty_review("b001", "reviewer-1", "reject", evidence={"attempt": i})
+        s = br.bounty_submit("b001", "SomeAgent", wr)
+        br.bounty_review(
+            ManualReviewRequest(
+                bounty_id="b001",
+                submission_id=s["submission_id"],
+                reviewer_actor_id="reviewer-1",
+                decision=ReviewDecision.REJECT,
+                evidence={"attempt": i},
+            )
+        )
 
     br.bounty_submit("b001", "SomeAgent", wr)  # final submission, left un-reviewed
 
