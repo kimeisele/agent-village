@@ -2441,7 +2441,12 @@ complete → return None (gültiger Complete-Record bleibt erhalten).
 **Complete-Record-Verifikation (`_verify_complete_projections`):**
 Prüft ALLE Projektionen: deterministic review, contract state + evaluation
 history, bounty state + finalization identity, criteria match, timestamps.
-Jede Abweichung → failed_closed.
+Zusätzlich werden die Journal-Timestamps validiert: `created_at`, `updated_at`,
+`completed_at` müssen finite, nicht-negative, nicht-booleane numerische Werte
+sein (`_is_finite_timestamp`). Erforderliche Ordnung: `created_at <= updated_at`
+und `created_at <= completed_at`. Malformed oder inkonsistente Journal-Timestamps
+→ return None + journal stage → failed_closed + diagnostic →
+`complete_contradiction`. Jede Abweichung → failed_closed.
 
 **Bounty- Projektion (sicher):**
 - ACCEPT: `submitted` mit exaktem current_submission → `done` + `completed_at`
@@ -2479,7 +2484,7 @@ Bounty-Lifecycle auf. `_bounty_review_automatic` wird nirgendwo außerhalb von
 `bounty_review()` aufgerufen. `final_evaluation.py` bleibt rein (keine Heartbeat-
 oder Bounty-Review-Importe). AST-Tests in `test_bounty_review_automatic.py`.
 
-**Tests:** 40 in `test_bounty_review_automatic.py`:
+**Tests:** 45 in `test_bounty_review_automatic.py`:
 - Happy path: ACCEPT, REJECT, INDETERMINATE rejection (3)
 - Idempotency: duplicate ACCEPT/REJECT preserves reviewed_at + completed_at (2)
 - Conflict: different hash for completed submission (1)
@@ -2491,7 +2496,9 @@ oder Bounty-Review-Importe). AST-Tests in `test_bounty_review_automatic.py`.
   contract contradiction after complete, bounty contradiction after complete,
   REJECT criteria-match interrupt, fulfilled no-history, fulfilled wrong
   evaluator version, extra/missing review fields (14)
-- Timestamp validation: negative/bool reviewed_at, NaN/Inf matcher reject (4)
+- Timestamp validation: negative/bool reviewed_at, NaN/Inf matcher reject,
+  negative journal created_at, boolean journal updated_at, negative journal
+  completed_at, completed_at < created_at, missing journal completed_at (9)
 - AST authority boundaries (5)
 
-Suite: 489/489. mypy grün (20 files), ruff grün, ruff format grün.
+Suite: 494/494. mypy grün (20 files), ruff grün, ruff format grün.
