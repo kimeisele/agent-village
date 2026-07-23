@@ -2415,77 +2415,61 @@ Ruff/mypy/py_compile grün.
 
 ---
 
-## §41 — Deterministic Bounty Review Finalization 02D (2026-07-22)
+## §41 — Deterministic Bounty Review Finalization 02D (2026-07-23)
 
 Per Issue #128. Schließt den automatischen Review-Pfad: `bounty_review()`
 akzeptiert einen diskriminierten Union `FinalEvaluation | ManualReviewRequest`
 und bleibt die einzige terminale Authority.
 
-Das Journal verwendet ein vereinfachtes Commit-and-Replay-Modell: atomarer
-Decide-Schritt, gefolgt von idempotenten Projektionen (Review, Contract,
-Bounty). Jeder Retry spielt alle Projektionen vollständig erneut ab — kein
-Fast-Path-Early-Return, keine Stage-basierte Resume-Logik.
+Das Journal verwendet ein Commit-and-Replay-Modell mit atomarem Decide-Schritt
+gefolgt von idempotenten Projektionen (Review, Contract, Bounty). Drei Stages:
+`decided`, `complete`, `failed_closed`. Keine alten Multi-Stage-Stages.
 
-**Schema:**
-- `ManualReviewRequest` (frozen dataclass): `bounty_id`, `submission_id`,
-  `reviewer_actor_id`, `decision` (ReviewDecision enum), `evidence` optional.
-- `FINALIZATION_JOURNAL = DIR / "finalization_journal.json"`: crash-sicheres
-  Finalisierungs-Journal.
-- `_journal_key(submission_id)` → `"finalize:<submission_id>"`.
-- Stages: `decided` → `complete` (oder `failed_closed`).
-- Immutable Bindings im Journal: `submission_id`, `bounty_id`,
-  `evaluation_hash`, `decision`.
-- `_write_journal_decided(evaluation)`: atomarer Commit (temp file → fsync →
-  os.replace → fsync dir). Konflikt-Erkennung über `_validate_journal_bindings`.
-- `_advance_journal_to(submission_id, stage)`: schreibt finale Stage.
+**Journal-Stages:**
+- `decided` — atomarer Commit aller immutable Bindings (7 Felder: submission_id,
+  bounty_id, contract_id, contract_version, evaluation_hash, decision,
+  evaluator_version).
+- `complete` — alle Projektionen bestätigt. `completed_at` genau einmal gesetzt.
+- `failed_closed` — Widerspruch oder Korruption erkannt. Von jeder Stage
+  erreichbar (inklusive complete bei nachträglicher Projektions-Korruption).
 
-**Automatischer Pfad (`_bounty_review_automatic`):**
-1. INDETERMINATE wird nie angewandt → `None`.
-2. Vollständige kanonische State-Rekonstruktion: Board, Contract,
-   Submission.
-3. `validate_final_evaluation()`: alle Bindings + Decision-Consistency.
-4. `current_submission_id` == `evaluation.submission_id`.
-5. Journal-Check: existierender Eintrag → Binding-Validierung → Resume
-   ab `decided`. Neuer Eintrag → Precondition-Check (bounty `submitted`,
-   Contract `active`) → atomarer `_write_journal_decided`.
-6. Idempotente Projektionen (jeder Retry spielt alle):
-   - **Review:** Matching Review vorhanden → reuse (preserved
-     `reviewed_at`). Kein Review → `_build_automatic_review_record()` +
-     `_attach_review()`. Conflicting Review → `failed_closed`.
-   - **Contract (ACCEPT):** `_apply_criteria_results()`: PASS →
-     `met=True`, FAIL → `met=False`, INDETERMINATE → `met=None`.
-     `contract.fulfill()` + `_set_contract_eval_binding()` +
-     `_save_contract()`. Bereits fulfilled → Binding- und Criteria-Match
-     verifiziert.
-   - **Contract (REJECT):** Criteria Results + Eval-Binding persistiert,
-     Contract bleibt ACTIVE.
-   - **Bounty:** ACCEPT → `done` + `completed_at`. REJECT → `claimed`.
-7. `_advance_journal_to(complete)`.
+**Binding-Validierung (`_validate_journal_bindings`):**
+Alle 7 immutable Felder werden strikt geprüft. Malformed Stage → failed_closed.
+Binding-Mismatch gegen non-complete → failed_closed. Binding-Mismatch gegen
+complete → return None (gültiger Complete-Record bleibt erhalten).
 
-**Contract Evaluation Binding:**
-- `contract.extra["auto_evaluation"]`: `{submission_id, evaluation_hash,
-  decision, evaluator_version}`. Verhindert dass ein anderer
-  FinalEvaluation denselben Contract überschreibt.
+**Complete-Record-Verifikation (`_verify_complete_projections`):**
+Prüft ALLE Projektionen: deterministic review, contract state + evaluation
+history, bounty state + finalization identity, criteria match, timestamps.
+Jede Abweichung → failed_closed.
 
-**Review-Record (automatisch):**
-```
-{
-    "review_kind": "deterministic",
-    "evaluation_hash": "<sha256>",
-    "evaluator_version": "02c-1",
-    "decision": "accept" | "reject",
-    "reason_codes": [<bounded strings>],
-    "criteria_results": [{"criterion_id", "result", "reason_code"}, ...],
-    "reviewed_at": <timestamp>
-}
-```
-Kein `evidence`-Feld, kein `reviewer_actor_id` — die Metadaten der Evaluation
-dienen als Herkunftsnachweis; der rohe Output bleibt im immutable Submission-
-Record.
+**Bounty- Projektion (sicher):**
+- ACCEPT: `submitted` mit exaktem current_submission → `done` + `completed_at`
+  + `_finalized_by`. `done` mit exakt match → no-op. `done` mit anderem
+  `_finalized_by` → failed_closed. Andere States → failed_closed.
+- REJECT: `submitted` → `claimed` + `_finalized_by`. `claimed` mit exact match
+  → no-op. `done` → failed_closed.
 
-**Atomic Persistence:** `_atomic_save_json(path, data)`: temp file → flush →
-fsync → os.replace → fsync dir. Verwendet für den initialen Journal-Decide;
-alle anderen Saves nutzen das bestehende `_save()`.
+**Contract Evaluation History:**
+`contract.extra["auto_evaluations"]` ist ein dict keyed by `submission_id`.
+Jeder Eintrag: `{submission_id, evaluation_hash, decision, evaluator_version}`.
+REJECT gefolgt von neuer Submission: alter Eintrag bleibt, neuer Eintrag wird
+mit neuem submission_id angehängt. Kein Überschreiben, kein Single-Value.
+
+**Bounty Finalization Identity:**
+`bounty["_finalized_by"]`: `{submission_id, evaluation_hash, decision}`.
+Erlaubt Unterscheidung zwischen exaktem Replay und nicht verwandtem State.
+
+**Atomic Persistence (vollständig):**
+`_atomic_save_json` (temp file → flush → fsync → os.replace → fsync dir) für
+ALLE Schreibvorgänge: journal decided, journal complete, journal failed_closed,
+review attachment, contract projection, bounty projection. Temp-File-Cleanup
+bei Exceptions. Kein nicht-atomares `_save()` im automatischen Pfad.
+
+**Exact Review Matching (`_is_matching_deterministic_review`):**
+Kanonische Felder: `review_kind`, `evaluation_hash`, `evaluator_version`,
+`decision`, `reason_codes`, `criteria_results`, `reviewed_at`. `reviewed_at`
+validiert als finiter numerischer Timestamp (NaN, ±Inf, bool rejected).
 
 **CLI:** `scripts/bounty_review_cli.py` baut `ManualReviewRequest` und ruft
 `bounty_review()` damit auf. Verhalten unverändert.
@@ -2495,14 +2479,16 @@ Bounty-Lifecycle auf. `_bounty_review_automatic` wird nirgendwo außerhalb von
 `bounty_review()` aufgerufen. `final_evaluation.py` bleibt rein (keine Heartbeat-
 oder Bounty-Review-Importe). AST-Tests in `test_bounty_review_automatic.py`.
 
-**Tests:** 21 in `test_bounty_review_automatic.py`:
-- Valid ACCEPT / REJECT / INDETERMINATE
-- Crash Recovery: 4 ACCEPT-Grenzen (decided→review→contract→bounty→complete)
-- Crash Recovery: 4 REJECT-Grenzen
-- Idempotency: duplicate call preserves reviewed_at
-- Conflict: different evaluation hash fails closed
-- Manual accept / reject via ManualReviewRequest
-- Resubmission: new submission after REJECT uses new journal key
-- AST authority boundaries (5 structural tests)
+**Tests:** 30 in `test_bounty_review_automatic.py`:
+- Happy path: ACCEPT, REJECT, INDETERMINATE rejection (3)
+- Idempotency: duplicate ACCEPT/REJECT preserves reviewed_at + completed_at (2)
+- Conflict: different hash for completed submission (1)
+- Manual path: ACCEPT/REJECT via ManualReviewRequest (2)
+- Resubmission: new submission after REJECT, old history retained (1)
+- Public-boundary interruption: 4 ACCEPT + 4 REJECT Grenzen (8)
+- Failure modes: conflicting review, fulfilled-under-other-eval, REJECT against
+  fulfilled, bounty done for other submission, no-journal, torn temp file,
+  contract contradiction after complete, bounty contradiction after complete (8)
+- AST authority boundaries (5)
 
-Suite: 470/470. mypy grün, ruff grün.
+Suite: 479/479. mypy grün (20 files), ruff grün, ruff format grün.

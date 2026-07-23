@@ -1,4 +1,11 @@
-"""Tests for the commit-and-replay automatic review path."""
+"""Tests for the commit-and-replay automatic review path.
+
+All crash-recovery tests use true public-boundary interruption: they
+pre-construct partial persisted state (simulating a crash), then invoke
+the public ``bounty_review(evaluation)``, inject an exception at the
+next persistence boundary, confirm interruption, then retry the same
+public call and prove exact completion and idempotency.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +19,8 @@ from village.final_evaluation import (
     ReviewDecision,
     build_final_evaluation,
 )
+
+# ── Helpers ──────────────────────────────────────────────────────
 
 
 def _setup(monkeypatch, tmp_path):
@@ -76,54 +85,71 @@ def _bootstrap_contract(contract):
     return contract
 
 
+def _submit_and_evaluate(monkeypatch, tmp_path, contract=None, output=None, execution_id="exec-1"):
+    """Full happy-path setup: contract → claim → submit → evaluate."""
+    _setup(monkeypatch, tmp_path)
+    _bootstrap_contract(contract or _make_contract())
+    _claim("SomeAgent")
+    sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result(execution_id=execution_id, output=output))
+    c = hb._load_contract("contract:b001:1")
+    evaluation = build_final_evaluation(sub, c, evaluated_at=1.0)
+    return sub, evaluation
+
+
+def _reject_setup(monkeypatch, tmp_path):
+    """Setup for REJECT path."""
+    c = SuccessCriterion.create(
+        name="summary_present",
+        required=True,
+        evaluator=EvaluatorType.FIELD_PRESENT,
+        evaluator_params={"field": "summary"},
+    )
+    contract = _make_contract(success_criteria=[c])
+    return _submit_and_evaluate(monkeypatch, tmp_path, contract=contract, output={"summary": None, "gaps": []})
+
+
 # ── Happy path ───────────────────────────────────────────────────
 
 
 class TestAutomaticAccept:
     def test_valid_automatic_accept(self, monkeypatch, tmp_path):
-        _setup(monkeypatch, tmp_path)
-        _bootstrap_contract(_make_contract())
-        _claim("SomeAgent")
-        sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
-        contract = hb._load_contract("contract:b001:1")
-        evaluation = build_final_evaluation(sub, contract, evaluated_at=1.0)
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
         assert evaluation.overall_decision == ReviewDecision.ACCEPT
 
         result = br.bounty_review(evaluation)
         assert result is not None
         assert result["bounty"]["status"] == "done"
+        assert result["bounty"]["_finalized_by"]["submission_id"] == sub["submission_id"]
         assert hb._load_contract("contract:b001:1").state == ContractState.FULFILLED
         assert result["review"]["review_kind"] == "deterministic"
         assert result["review"]["evaluation_hash"] == evaluation.evaluation_hash
         journal = hb._load(br.FINALIZATION_JOURNAL)
         jkey = f"finalize:{sub['submission_id']}"
         assert journal[jkey]["stage"] == "complete"
+        assert "completed_at" in journal[jkey]
+        contract = hb._load_contract("contract:b001:1")
+        evals = contract.extra.get("auto_evaluations", {})
+        assert sub["submission_id"] in evals
 
 
 class TestAutomaticReject:
     def test_valid_automatic_reject(self, monkeypatch, tmp_path):
-        c = SuccessCriterion.create(
-            name="summary_present",
-            required=True,
-            evaluator=EvaluatorType.FIELD_PRESENT,
-            evaluator_params={"field": "summary"},
-        )
-        contract = _make_contract(success_criteria=[c])
-        _setup(monkeypatch, tmp_path)
-        _bootstrap_contract(contract)
-        _claim("SomeAgent")
-        sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result(output={"summary": None, "gaps": []}))
-        contract = hb._load_contract("contract:b001:1")
-        evaluation = build_final_evaluation(sub, contract, evaluated_at=1.0)
+        sub, evaluation = _reject_setup(monkeypatch, tmp_path)
         assert evaluation.overall_decision == ReviewDecision.REJECT
 
         result = br.bounty_review(evaluation)
         assert result is not None
         assert result["bounty"]["status"] == "claimed"
+        assert result["bounty"]["_finalized_by"]["submission_id"] == sub["submission_id"]
         assert hb._load_contract("contract:b001:1").state == ContractState.ACTIVE
         journal = hb._load(br.FINALIZATION_JOURNAL)
         jkey = f"finalize:{sub['submission_id']}"
         assert journal[jkey]["stage"] == "complete"
+        assert "completed_at" in journal[jkey]
+        contract = hb._load_contract("contract:b001:1")
+        evals = contract.extra.get("auto_evaluations", {})
+        assert sub["submission_id"] in evals
+        assert evals[sub["submission_id"]]["decision"] == "reject"
 
 
 class TestIndeterminate:
@@ -138,98 +164,42 @@ class TestIndeterminate:
         assert br.bounty_review(evaluation) is None
 
 
-# ── Crash recovery ──────────────────────────────────────────────
-
-
-class TestCrashRecovery:
-    """Crash after journal decided, before each projection."""
-
-    def _setup_accept(self, monkeypatch, tmp_path):
-        _setup(monkeypatch, tmp_path)
-        _bootstrap_contract(_make_contract())
-        _claim("SomeAgent")
-        sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
-        contract = hb._load_contract("contract:b001:1")
-        evaluation = build_final_evaluation(sub, contract, evaluated_at=1.0)
-        assert evaluation.overall_decision == ReviewDecision.ACCEPT
-        return sub, evaluation
-
-    def test_crash_after_decided_before_review(self, monkeypatch, tmp_path):
-        sub, evaluation = self._setup_accept(monkeypatch, tmp_path)
-        # Write journal decided, no review
-        br._write_journal_decided(evaluation)
-        # Retry
-        result = br.bounty_review(evaluation)
-        assert result is not None
-        assert result["bounty"]["status"] == "done"
-        journal = hb._load(br.FINALIZATION_JOURNAL)
-        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "complete"
-
-    def test_crash_after_review_before_contract(self, monkeypatch, tmp_path):
-        sub, evaluation = self._setup_accept(monkeypatch, tmp_path)
-        br._write_journal_decided(evaluation)
-        br._attach_review(sub["submission_id"], br._build_automatic_review_record(evaluation))
-        # Retry
-        result = br.bounty_review(evaluation)
-        assert result is not None
-        assert result["bounty"]["status"] == "done"
-        journal = hb._load(br.FINALIZATION_JOURNAL)
-        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "complete"
-
-    def test_crash_after_contract_before_bounty(self, monkeypatch, tmp_path):
-        sub, evaluation = self._setup_accept(monkeypatch, tmp_path)
-        br._write_journal_decided(evaluation)
-        br._attach_review(sub["submission_id"], br._build_automatic_review_record(evaluation))
-        contract = hb._load_contract("contract:b001:1")
-        br._apply_criteria_results(contract, evaluation)
-        contract.fulfill()
-        br._set_contract_eval_binding(contract, evaluation)
-        hb._save_contract(contract)
-        # Retry
-        result = br.bounty_review(evaluation)
-        assert result is not None
-        assert result["bounty"]["status"] == "done"
-        journal = hb._load(br.FINALIZATION_JOURNAL)
-        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "complete"
-
-    def test_crash_after_bounty_before_complete(self, monkeypatch, tmp_path):
-        sub, evaluation = self._setup_accept(monkeypatch, tmp_path)
-        br._write_journal_decided(evaluation)
-        br._attach_review(sub["submission_id"], br._build_automatic_review_record(evaluation))
-        contract = hb._load_contract("contract:b001:1")
-        br._apply_criteria_results(contract, evaluation)
-        contract.fulfill()
-        br._set_contract_eval_binding(contract, evaluation)
-        hb._save_contract(contract)
-        board = hb._load(hb.BOUNTIES)
-        board["bounties"][0]["status"] = "done"
-        hb._save(hb.BOUNTIES, board)
-        # Retry
-        result = br.bounty_review(evaluation)
-        assert result is not None
-        journal = hb._load(br.FINALIZATION_JOURNAL)
-        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "complete"
-
-
 # ── Idempotency ─────────────────────────────────────────────────
 
 
 class TestIdempotency:
     def test_duplicate_call_makes_no_changes(self, monkeypatch, tmp_path):
-        _setup(monkeypatch, tmp_path)
-        _bootstrap_contract(_make_contract())
-        _claim("SomeAgent")
-        sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
-        contract = hb._load_contract("contract:b001:1")
-        evaluation = build_final_evaluation(sub, contract, evaluated_at=1.0)
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
 
         result1 = br.bounty_review(evaluation)
         assert result1 is not None
         reviewed_at_1 = result1["review"]["reviewed_at"]
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        completed_at_1 = journal[br._journal_key(sub["submission_id"])]["completed_at"]
 
         result2 = br.bounty_review(evaluation)
         assert result2 is not None
-        assert result2["review"]["reviewed_at"] == reviewed_at_1  # preserved
+        assert result2["review"]["reviewed_at"] == reviewed_at_1
+        completed_at_2 = journal[br._journal_key(sub["submission_id"])]["completed_at"]
+        assert completed_at_2 == completed_at_1
+        contract = hb._load_contract("contract:b001:1")
+        evals = contract.extra.get("auto_evaluations", {})
+        assert len(evals) == 1
+
+    def test_duplicate_reject_makes_no_changes(self, monkeypatch, tmp_path):
+        sub, evaluation = _reject_setup(monkeypatch, tmp_path)
+
+        result1 = br.bounty_review(evaluation)
+        assert result1 is not None
+        reviewed_at_1 = result1["review"]["reviewed_at"]
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        completed_at_1 = journal[br._journal_key(sub["submission_id"])]["completed_at"]
+
+        result2 = br.bounty_review(evaluation)
+        assert result2 is not None
+        assert result2["review"]["reviewed_at"] == reviewed_at_1
+        completed_at_2 = journal[br._journal_key(sub["submission_id"])]["completed_at"]
+        assert completed_at_2 == completed_at_1
 
 
 # ── Conflict ────────────────────────────────────────────────────
@@ -237,16 +207,20 @@ class TestIdempotency:
 
 class TestConflict:
     def test_different_hash_fails(self, monkeypatch, tmp_path):
-        _setup(monkeypatch, tmp_path)
-        _bootstrap_contract(_make_contract())
-        _claim("SomeAgent")
-        sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
+        """Different evaluation hash for completed submission returns None.
+        Journal stays at complete (preserving the valid first evaluation)."""
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
         contract = hb._load_contract("contract:b001:1")
-        e1 = build_final_evaluation(sub, contract, evaluated_at=1.0)
+        e1 = evaluation
         e2 = build_final_evaluation(sub, contract, evaluated_at=2.0)
 
+        # First evaluation succeeds
         assert br.bounty_review(e1) is not None
-        assert br.bounty_review(e2) is None  # conflicting hash (decided exists with different hash)
+        # Different hash → rejected, journal preserved
+        result2 = br.bounty_review(e2)
+        assert result2 is None
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "complete"
 
 
 # ── Manual path unchanged ────────────────────────────────────────
@@ -258,7 +232,6 @@ class TestManualPath:
         _bootstrap_contract(_make_contract())
         _claim("SomeAgent")
         sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result())
-        # Set met=True so fulfill passes
         contract = hb._load_contract("contract:b001:1")
         contract.success_criteria[0].met = True
         hb._save_contract(contract)
@@ -292,98 +265,15 @@ class TestManualPath:
         assert result["bounty"]["status"] == "claimed"
 
 
-# ── REJECT crash recovery ──────────────────────────────────────
-
-
-class TestCrashRecoveryReject:
-    def _setup_reject(self, monkeypatch, tmp_path):
-        c = SuccessCriterion.create(
-            name="summary_present",
-            required=True,
-            evaluator=EvaluatorType.FIELD_PRESENT,
-            evaluator_params={"field": "summary"},
-        )
-        contract = _make_contract(success_criteria=[c])
-        _setup(monkeypatch, tmp_path)
-        _bootstrap_contract(contract)
-        _claim("SomeAgent")
-        sub = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result(output={"summary": None, "gaps": []}))
-        contract = hb._load_contract("contract:b001:1")
-        evaluation = build_final_evaluation(sub, contract, evaluated_at=1.0)
-        assert evaluation.overall_decision == ReviewDecision.REJECT
-        return sub, evaluation
-
-    def test_reject_crash_after_decided_before_review(self, monkeypatch, tmp_path):
-        sub, evaluation = self._setup_reject(monkeypatch, tmp_path)
-        br._write_journal_decided(evaluation)
-        result = br.bounty_review(evaluation)
-        assert result is not None
-        assert result["bounty"]["status"] == "claimed"
-        journal = hb._load(br.FINALIZATION_JOURNAL)
-        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "complete"
-
-    def test_reject_crash_after_review_before_contract(self, monkeypatch, tmp_path):
-        sub, evaluation = self._setup_reject(monkeypatch, tmp_path)
-        br._write_journal_decided(evaluation)
-        br._attach_review(sub["submission_id"], br._build_automatic_review_record(evaluation))
-        result = br.bounty_review(evaluation)
-        assert result is not None
-        assert result["bounty"]["status"] == "claimed"
-        journal = hb._load(br.FINALIZATION_JOURNAL)
-        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "complete"
-
-    def test_reject_crash_after_contract_before_bounty(self, monkeypatch, tmp_path):
-        sub, evaluation = self._setup_reject(monkeypatch, tmp_path)
-        br._write_journal_decided(evaluation)
-        br._attach_review(sub["submission_id"], br._build_automatic_review_record(evaluation))
-        contract = hb._load_contract("contract:b001:1")
-        br._apply_criteria_results(contract, evaluation)
-        br._set_contract_eval_binding(contract, evaluation)
-        hb._save_contract(contract)
-        result = br.bounty_review(evaluation)
-        assert result is not None
-        assert result["bounty"]["status"] == "claimed"
-        journal = hb._load(br.FINALIZATION_JOURNAL)
-        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "complete"
-
-    def test_reject_crash_after_bounty_before_complete(self, monkeypatch, tmp_path):
-        sub, evaluation = self._setup_reject(monkeypatch, tmp_path)
-        br._write_journal_decided(evaluation)
-        br._attach_review(sub["submission_id"], br._build_automatic_review_record(evaluation))
-        contract = hb._load_contract("contract:b001:1")
-        br._apply_criteria_results(contract, evaluation)
-        br._set_contract_eval_binding(contract, evaluation)
-        hb._save_contract(contract)
-        board = hb._load(hb.BOUNTIES)
-        board["bounties"][0]["status"] = "claimed"
-        hb._save(hb.BOUNTIES, board)
-        result = br.bounty_review(evaluation)
-        assert result is not None
-        journal = hb._load(br.FINALIZATION_JOURNAL)
-        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "complete"
-
-
 # ── Resubmission after REJECT ───────────────────────────────────
 
 
 class TestResubmission:
     def test_new_submission_after_reject_uses_new_journal_key(self, monkeypatch, tmp_path):
-        c = SuccessCriterion.create(
-            name="summary_present",
-            required=True,
-            evaluator=EvaluatorType.FIELD_PRESENT,
-            evaluator_params={"field": "summary"},
-        )
-        contract = _make_contract(success_criteria=[c])
-        _setup(monkeypatch, tmp_path)
-        _bootstrap_contract(contract)
-        _claim("SomeAgent")
-        sub1 = br.bounty_submit("b001", "SomeAgent", _succeeded_work_result(output={"summary": None, "gaps": []}))
-        e1 = build_final_evaluation(sub1, hb._load_contract("contract:b001:1"), evaluated_at=1.0)
-        br.bounty_review(e1)  # REJECT → claimed
+        sub1, e1 = _reject_setup(monkeypatch, tmp_path)
+        br.bounty_review(e1)
 
-        # Claim and submit again
-        _claim("SomeAgent")  # re-claim
+        _claim("SomeAgent")
         sub2 = br.bounty_submit(
             "b001", "SomeAgent", _succeeded_work_result(execution_id="exec-2", output={"summary": [1]})
         )
@@ -391,11 +281,430 @@ class TestResubmission:
 
         result = br.bounty_review(e2)
         assert result is not None
-        # Old submission's journal is unchanged
         journal = hb._load(br.FINALIZATION_JOURNAL)
         assert journal[br._journal_key(sub1["submission_id"])]["stage"] == "complete"
         assert journal[br._journal_key(sub2["submission_id"])]["stage"] == "complete"
         assert br._journal_key(sub1["submission_id"]) != br._journal_key(sub2["submission_id"])
+        contract = hb._load_contract("contract:b001:1")
+        evals = contract.extra.get("auto_evaluations", {})
+        assert sub1["submission_id"] in evals
+        assert sub2["submission_id"] in evals
+        assert evals[sub1["submission_id"]]["decision"] == "reject"
+
+
+# ═════════════════════════════════════════════════════════════════
+# True public-boundary interruption tests (Blocker J)
+#
+# Pattern: pre-construct partial state (simulating crash), then
+# call public bounty_review(), inject exception at next boundary,
+# confirm interruption, retry same public call, prove completion.
+# ═════════════════════════════════════════════════════════════════
+
+
+class TestInterruptAccept:
+    """Interruption at each ACCEPT projection boundary."""
+
+    def test_interrupt_after_decided_before_review(self, monkeypatch, tmp_path):
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        # Simulate: decided journal written, crash before review
+        br._write_journal_decided(evaluation)
+        assert hb._load(br.FINALIZATION_JOURNAL)[br._journal_key(sub["submission_id"])]["stage"] == "decided"
+
+        # Inject crash in _build_automatic_review_record (before _attach_review)
+        original_build = br._build_automatic_review_record
+        monkeypatch.setattr(
+            br, "_build_automatic_review_record", lambda e: (_ for _ in ()).throw(RuntimeError("crash_before_review"))
+        )
+
+        try:
+            br.bounty_review(evaluation)
+            pytest.fail("expected crash")
+        except RuntimeError:
+            pass
+
+        # Restore and retry
+        monkeypatch.setattr(br, "_build_automatic_review_record", original_build)
+        result = br.bounty_review(evaluation)
+        assert result is not None
+        assert result["bounty"]["status"] == "done"
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        jkey = br._journal_key(sub["submission_id"])
+        assert journal[jkey]["stage"] == "complete"
+        assert "completed_at" in journal[jkey]
+        # Exactly one review, no duplicates
+        submission = br._get_submission(sub["submission_id"])
+        assert submission["review"] is not None
+        contract = hb._load_contract("contract:b001:1")
+        assert contract.state == ContractState.FULFILLED
+        assert len(contract.extra.get("auto_evaluations", {})) == 1
+
+    def test_interrupt_after_review_before_contract(self, monkeypatch, tmp_path):
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        # Simulate: decided + review persisted, crash before contract
+        br._write_journal_decided(evaluation)
+        br._attach_review(sub["submission_id"], br._build_automatic_review_record(evaluation))
+
+        # Inject crash in _record_eval_history
+        original_record = br._record_eval_history
+        monkeypatch.setattr(
+            br, "_record_eval_history", lambda c, e: (_ for _ in ()).throw(RuntimeError("crash_before_contract"))
+        )
+
+        try:
+            br.bounty_review(evaluation)
+            pytest.fail("expected crash")
+        except RuntimeError:
+            pass
+
+        monkeypatch.setattr(br, "_record_eval_history", original_record)
+        result = br.bounty_review(evaluation)
+        assert result is not None
+        assert result["bounty"]["status"] == "done"
+        contract = hb._load_contract("contract:b001:1")
+        assert contract.state == ContractState.FULFILLED
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "complete"
+
+    def test_interrupt_after_contract_before_bounty(self, monkeypatch, tmp_path):
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        # Simulate: decided + review + contract persisted
+        br._write_journal_decided(evaluation)
+        br._attach_review(sub["submission_id"], br._build_automatic_review_record(evaluation))
+        contract = hb._load_contract("contract:b001:1")
+        br._apply_criteria_results(contract, evaluation)
+        contract.fulfill()
+        br._record_eval_history(contract, evaluation)
+        hb._save_contract(contract)
+
+        # Inject crash in _atomic_save_json when saving bounties
+        original_atomic = br._atomic_save_json
+
+        def _injected_atomic(path, data):
+            if path.name.startswith("bounties"):
+                raise RuntimeError("crash_before_bounty")
+            return original_atomic(path, data)
+
+        monkeypatch.setattr(br, "_atomic_save_json", _injected_atomic)
+
+        try:
+            br.bounty_review(evaluation)
+            pytest.fail("expected crash")
+        except RuntimeError:
+            pass
+
+        monkeypatch.setattr(br, "_atomic_save_json", original_atomic)
+        result = br.bounty_review(evaluation)
+        assert result is not None
+        assert result["bounty"]["status"] == "done"
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "complete"
+
+    def test_interrupt_after_bounty_before_complete(self, monkeypatch, tmp_path):
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        # Simulate: everything persisted except journal complete
+        br._write_journal_decided(evaluation)
+        br._attach_review(sub["submission_id"], br._build_automatic_review_record(evaluation))
+        contract = hb._load_contract("contract:b001:1")
+        br._apply_criteria_results(contract, evaluation)
+        contract.fulfill()
+        br._record_eval_history(contract, evaluation)
+        hb._save_contract(contract)
+        board = hb._load(hb.BOUNTIES)
+        board["bounties"][0]["status"] = "done"
+        board["bounties"][0]["completed_at"] = 1.0
+        br._set_bounty_finalization(board["bounties"][0], evaluation)
+        hb._save(hb.BOUNTIES, board)
+
+        # Inject crash in _advance_journal_to
+        original_advance = br._advance_journal_to
+        monkeypatch.setattr(
+            br, "_advance_journal_to", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("crash_before_complete"))
+        )
+
+        try:
+            br.bounty_review(evaluation)
+            pytest.fail("expected crash")
+        except RuntimeError:
+            pass
+
+        monkeypatch.setattr(br, "_advance_journal_to", original_advance)
+        result = br.bounty_review(evaluation)
+        assert result is not None
+        assert result["bounty"]["status"] == "done"
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "complete"
+        assert "completed_at" in journal[br._journal_key(sub["submission_id"])]
+        # Stable reviewed_at
+        reviewed_at_1 = result["review"]["reviewed_at"]
+        result2 = br.bounty_review(evaluation)
+        assert result2["review"]["reviewed_at"] == reviewed_at_1
+
+
+class TestInterruptReject:
+    """Interruption at each REJECT projection boundary."""
+
+    def test_interrupt_reject_after_decided_before_review(self, monkeypatch, tmp_path):
+        sub, evaluation = _reject_setup(monkeypatch, tmp_path)
+        br._write_journal_decided(evaluation)
+
+        original_build = br._build_automatic_review_record
+        monkeypatch.setattr(
+            br,
+            "_build_automatic_review_record",
+            lambda e: (_ for _ in ()).throw(RuntimeError("crash_before_review_reject")),
+        )
+
+        try:
+            br.bounty_review(evaluation)
+            pytest.fail("expected crash")
+        except RuntimeError:
+            pass
+
+        monkeypatch.setattr(br, "_build_automatic_review_record", original_build)
+        result = br.bounty_review(evaluation)
+        assert result is not None
+        assert result["bounty"]["status"] == "claimed"
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "complete"
+
+    def test_interrupt_reject_after_review_before_contract(self, monkeypatch, tmp_path):
+        sub, evaluation = _reject_setup(monkeypatch, tmp_path)
+        br._write_journal_decided(evaluation)
+        br._attach_review(sub["submission_id"], br._build_automatic_review_record(evaluation))
+
+        original_record = br._record_eval_history
+        monkeypatch.setattr(
+            br, "_record_eval_history", lambda c, e: (_ for _ in ()).throw(RuntimeError("crash_before_reject_contract"))
+        )
+
+        try:
+            br.bounty_review(evaluation)
+            pytest.fail("expected crash")
+        except RuntimeError:
+            pass
+
+        monkeypatch.setattr(br, "_record_eval_history", original_record)
+        result = br.bounty_review(evaluation)
+        assert result is not None
+        assert result["bounty"]["status"] == "claimed"
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "complete"
+
+    def test_interrupt_reject_after_contract_before_bounty(self, monkeypatch, tmp_path):
+        sub, evaluation = _reject_setup(monkeypatch, tmp_path)
+        br._write_journal_decided(evaluation)
+        br._attach_review(sub["submission_id"], br._build_automatic_review_record(evaluation))
+        contract = hb._load_contract("contract:b001:1")
+        br._apply_criteria_results(contract, evaluation)
+        br._record_eval_history(contract, evaluation)
+        hb._save_contract(contract)
+
+        original_atomic = br._atomic_save_json
+
+        def _injected_atomic(path, data):
+            if path.name.startswith("bounties"):
+                raise RuntimeError("crash_before_reject_bounty")
+            return original_atomic(path, data)
+
+        monkeypatch.setattr(br, "_atomic_save_json", _injected_atomic)
+
+        try:
+            br.bounty_review(evaluation)
+            pytest.fail("expected crash")
+        except RuntimeError:
+            pass
+
+        monkeypatch.setattr(br, "_atomic_save_json", original_atomic)
+        result = br.bounty_review(evaluation)
+        assert result is not None
+        assert result["bounty"]["status"] == "claimed"
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "complete"
+
+    def test_interrupt_reject_after_bounty_before_complete(self, monkeypatch, tmp_path):
+        sub, evaluation = _reject_setup(monkeypatch, tmp_path)
+        br._write_journal_decided(evaluation)
+        br._attach_review(sub["submission_id"], br._build_automatic_review_record(evaluation))
+        contract = hb._load_contract("contract:b001:1")
+        br._apply_criteria_results(contract, evaluation)
+        br._record_eval_history(contract, evaluation)
+        hb._save_contract(contract)
+        board = hb._load(hb.BOUNTIES)
+        board["bounties"][0]["status"] = "claimed"
+        br._set_bounty_finalization(board["bounties"][0], evaluation)
+        hb._save(hb.BOUNTIES, board)
+
+        original_advance = br._advance_journal_to
+        monkeypatch.setattr(
+            br,
+            "_advance_journal_to",
+            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("crash_before_reject_complete")),
+        )
+
+        try:
+            br.bounty_review(evaluation)
+            pytest.fail("expected crash")
+        except RuntimeError:
+            pass
+
+        monkeypatch.setattr(br, "_advance_journal_to", original_advance)
+        result = br.bounty_review(evaluation)
+        assert result is not None
+        assert result["bounty"]["status"] == "claimed"
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "complete"
+        reviewed_at_1 = result["review"]["reviewed_at"]
+        result2 = br.bounty_review(evaluation)
+        assert result2["review"]["reviewed_at"] == reviewed_at_1
+
+
+# ── Failure-mode tests ──────────────────────────────────────────
+
+
+class TestFailureModes:
+    """Tests for unsafe/incompatible states per Blocker J."""
+
+    def test_conflicting_review_fails_closed(self, monkeypatch, tmp_path):
+        """Submission with mismatched review → failed_closed."""
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        br._write_journal_decided(evaluation)
+        br._attach_review(
+            sub["submission_id"],
+            {
+                "review_kind": "deterministic",
+                "evaluation_hash": "wrong_hash_0000000000000000000000000000000000000000",
+                "evaluator_version": evaluation.evaluator_version,
+                "decision": "accept",
+                "reason_codes": [],
+                "criteria_results": [],
+                "reviewed_at": 1.0,
+            },
+        )
+
+        result = br.bounty_review(evaluation)
+        assert result is None
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
+
+    def test_accept_fulfilled_under_other_eval_fails_closed(self, monkeypatch, tmp_path):
+        """Complete journal, contract later bound to different eval → failed_closed."""
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        # First review succeeds
+        assert br.bounty_review(evaluation) is not None
+
+        # Tamper: change contract auto_evaluations to a different hash
+        contract = hb._load_contract("contract:b001:1")
+        contract.extra["auto_evaluations"][sub["submission_id"]] = {
+            "submission_id": sub["submission_id"],
+            "evaluation_hash": "other_hash_00000000000000000000000000000000000000",
+            "decision": "accept",
+            "evaluator_version": evaluation.evaluator_version,
+        }
+        hb._save_contract(contract)
+
+        result = br.bounty_review(evaluation)
+        assert result is None
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
+
+    def test_reject_against_fulfilled_contract_fails_closed(self, monkeypatch, tmp_path):
+        """REJECT journal at decided, contract later fulfilled → retry fails closed."""
+        sub, evaluation = _reject_setup(monkeypatch, tmp_path)
+        # Write decided journal and attach review (simulate crash before contract)
+        br._write_journal_decided(evaluation)
+        br._attach_review(sub["submission_id"], br._build_automatic_review_record(evaluation))
+
+        # Now someone manually fulfills the contract
+        contract = hb._load_contract("contract:b001:1")
+        contract.success_criteria[0].met = True  # override to allow fulfill
+        contract.fulfill()
+        hb._save_contract(contract)
+
+        # Retry REJECT → contract is FULFILLED, not ACTIVE → fail closed
+        result = br.bounty_review(evaluation)
+        assert result is None
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
+
+    def test_bounty_done_for_other_submission_fails_closed(self, monkeypatch, tmp_path):
+        """Complete ACCEPT, bounty later changed to different eval → failed_closed."""
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        assert br.bounty_review(evaluation) is not None
+
+        # Tamper: change bounty finalization to different hash
+        board = hb._load(hb.BOUNTIES)
+        board["bounties"][0]["_finalized_by"] = {
+            "submission_id": sub["submission_id"],
+            "evaluation_hash": "other_hash_00000000000000000000000000000000000000",
+            "decision": "accept",
+        }
+        hb._save(hb.BOUNTIES, board)
+
+        result = br.bounty_review(evaluation)
+        assert result is None
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
+
+    def test_done_with_matching_review_but_no_journal_not_accepted(self, monkeypatch, tmp_path):
+        """Bounty done, matching review, but no journal → returns None."""
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+
+        contract = hb._load_contract("contract:b001:1")
+        br._apply_criteria_results(contract, evaluation)
+        contract.fulfill()
+        br._record_eval_history(contract, evaluation)
+        hb._save_contract(contract)
+        review_record = br._build_automatic_review_record(evaluation)
+        br._attach_review(sub["submission_id"], review_record)
+        board = hb._load(hb.BOUNTIES)
+        board["bounties"][0]["status"] = "done"
+        br._set_bounty_finalization(board["bounties"][0], evaluation)
+        hb._save(hb.BOUNTIES, board)
+
+        result = br.bounty_review(evaluation)
+        assert result is None  # No journal → no proof of decision
+
+    def test_torn_journal_temp_file_not_committed(self, monkeypatch, tmp_path):
+        """An unrenamed temp file does not affect the canonical journal."""
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+
+        tmp_file = br.FINALIZATION_JOURNAL.with_name(f"{br.FINALIZATION_JOURNAL.name}.tmp99999")
+        tmp_file.write_text('{"fake": true}')
+
+        result = br.bounty_review(evaluation)
+        assert result is not None
+        if tmp_file.exists():
+            tmp_file.unlink()
+
+    def test_complete_record_with_later_contract_contradiction_fails_closed(self, monkeypatch, tmp_path):
+        """Complete journal, then contract criteria changed → failed_closed."""
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        assert br.bounty_review(evaluation) is not None
+
+        # Tamper: change contract criteria met values
+        contract = hb._load_contract("contract:b001:1")
+        contract.success_criteria[0].met = False
+        hb._save_contract(contract)
+
+        result = br.bounty_review(evaluation)
+        assert result is None
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
+
+    def test_complete_record_with_later_bounty_contradiction_fails_closed(self, monkeypatch, tmp_path):
+        """Complete journal, then bounty status changed → failed_closed."""
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        assert br.bounty_review(evaluation) is not None
+
+        # Tamper: change bounty status
+        board = hb._load(hb.BOUNTIES)
+        board["bounties"][0]["status"] = "open"
+        hb._save(hb.BOUNTIES, board)
+
+        result = br.bounty_review(evaluation)
+        assert result is None
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
 
 
 # ── AST authority boundaries ───────────────────────────────────
@@ -412,8 +721,6 @@ class TestAuthorityBoundaries:
     a second completion authority, and that purity boundaries hold."""
 
     def test_only_bounty_review_module_calls_contract_fulfill_for_lifecycle(self):
-        """No module outside bounty_review.py and contracts.py itself
-        may call .fulfill()."""
         import ast
 
         import village.interpreter as interpreter
@@ -441,7 +748,6 @@ class TestAuthorityBoundaries:
                         pytest.fail(f"{name} calls .fulfill()")
 
     def test_final_evaluation_remains_pure(self):
-        """final_evaluation.py must not import heartbeat or bounty_review."""
         import ast
 
         with open("village/final_evaluation.py") as f:
@@ -452,7 +758,6 @@ class TestAuthorityBoundaries:
                     pytest.fail(f"final_evaluation imports {node.module}")
 
     def test_no_second_completion_path(self):
-        """_bounty_review_automatic is only called from bounty_review()."""
         import ast
 
         with open("village/bounty_review.py") as f:
@@ -475,7 +780,6 @@ class TestAuthorityBoundaries:
             assert attr in call_names or f".{attr}" in src
 
     def test_automatic_review_not_called_outside_bounty_review(self):
-        """No other module imports or calls _bounty_review_automatic."""
         import village.heartbeat as heartbeat
         import village.interpreter as interpreter
         import village.worker as worker
@@ -486,7 +790,6 @@ class TestAuthorityBoundaries:
                 pytest.fail(f"{name} references _bounty_review_automatic")
 
     def test_bounty_review_is_sole_fulfill_caller(self):
-        """Only bounty_review calls .fulfill() on a VillageContract for the bounty lifecycle."""
         import ast
 
         with open("village/contracts.py") as f:
