@@ -706,6 +706,216 @@ class TestFailureModes:
         journal = hb._load(br.FINALIZATION_JOURNAL)
         assert journal[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
 
+    def test_reject_criteria_match_interrupt_at_contract(self, monkeypatch, tmp_path):
+        """REJECT where criteria already match, interrupted at contract persistence."""
+        sub, evaluation = _reject_setup(monkeypatch, tmp_path)
+        br._write_journal_decided(evaluation)
+        br._attach_review(sub["submission_id"], br._build_automatic_review_record(evaluation))
+        # Pre-apply criteria so they match on retry
+        contract = hb._load_contract("contract:b001:1")
+        br._apply_criteria_results(contract, evaluation)
+        hb._save_contract(contract)
+
+        # Inject interruption at atomic contract save
+        original_atomic = br._atomic_save_json
+        call_count = [0]
+
+        def _injected_atomic(path, data):
+            if path.name.startswith("contracts"):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    raise RuntimeError("crash_reject_contract_persist")
+            return original_atomic(path, data)
+
+        monkeypatch.setattr(br, "_atomic_save_json", _injected_atomic)
+
+        try:
+            br.bounty_review(evaluation)
+            pytest.fail("expected crash")
+        except RuntimeError:
+            pass
+
+        monkeypatch.setattr(br, "_atomic_save_json", original_atomic)
+        result = br.bounty_review(evaluation)
+        assert result is not None
+        assert result["bounty"]["status"] == "claimed"
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "complete"
+        # One durable history entry
+        contract = hb._load_contract("contract:b001:1")
+        evals = contract.extra.get("auto_evaluations", {})
+        assert sub["submission_id"] in evals
+
+    def test_fulfilled_no_history_fails_closed(self, monkeypatch, tmp_path):
+        """FULFILLED contract with no evaluation-history entry → failed closed."""
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        # First review succeeds (creates history)
+        assert br.bounty_review(evaluation) is not None
+
+        # Tamper: remove eval history from the fulfilled contract
+        contract = hb._load_contract("contract:b001:1")
+        contract.extra.pop("auto_evaluations", None)
+        hb._save_contract(contract)
+
+        result = br.bounty_review(evaluation)
+        assert result is None
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
+
+    def test_fulfilled_wrong_evaluator_version_fails_closed(self, monkeypatch, tmp_path):
+        """FULFILLED with matching hash/decision but wrong evaluator version → failed closed."""
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        assert br.bounty_review(evaluation) is not None
+
+        # Tamper: change evaluator_version in history
+        contract = hb._load_contract("contract:b001:1")
+        evals = contract.extra.get("auto_evaluations", {})
+        evals[sub["submission_id"]]["evaluator_version"] = "wrong-version"
+        hb._save_contract(contract)
+
+        result = br.bounty_review(evaluation)
+        assert result is None
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
+
+    def test_extra_top_level_review_field_fails_closed(self, monkeypatch, tmp_path):
+        """Review with extra top-level field → mismatch → failed closed."""
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        br._write_journal_decided(evaluation)
+        review = br._build_automatic_review_record(evaluation)
+        review["extra_field"] = "unexpected"
+        br._attach_review(sub["submission_id"], review)
+
+        result = br.bounty_review(evaluation)
+        assert result is None
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
+
+    def test_extra_criterion_result_field_fails_closed(self, monkeypatch, tmp_path):
+        """Criterion result with extra field → mismatch → failed closed."""
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        br._write_journal_decided(evaluation)
+        review = br._build_automatic_review_record(evaluation)
+        review["criteria_results"][0]["extra"] = "unexpected"
+        br._attach_review(sub["submission_id"], review)
+
+        result = br.bounty_review(evaluation)
+        assert result is None
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
+
+    def test_missing_canonical_review_field_fails_closed(self, monkeypatch, tmp_path):
+        """Review missing a canonical field → mismatch → failed closed."""
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        br._write_journal_decided(evaluation)
+        review = br._build_automatic_review_record(evaluation)
+        del review["evaluator_version"]
+        br._attach_review(sub["submission_id"], review)
+
+        result = br.bounty_review(evaluation)
+        assert result is None
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
+
+
+# ── Timestamp validation ────────────────────────────────────────
+
+
+class TestTimestampValidation:
+    """Malformed review timestamp tests."""
+
+    def test_negative_reviewed_at_fails_closed(self, monkeypatch, tmp_path):
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        br._write_journal_decided(evaluation)
+        review = br._build_automatic_review_record(evaluation)
+        review["reviewed_at"] = -1.0
+        br._attach_review(sub["submission_id"], review)
+
+        result = br.bounty_review(evaluation)
+        assert result is None
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
+
+    def test_nan_reviewed_at_rejected_by_matcher(self):
+        """_is_matching_deterministic_review rejects NaN reviewed_at (defence in depth)."""
+        import math
+
+        # Build minimal evaluation and review with NaN reviewed_at.
+        # Cannot go through JSON persistence (allow_nan=False), so test
+        # the matching function directly.
+        from village.final_evaluation import FinalEvaluation, ReviewDecision
+
+        evaluation = FinalEvaluation(
+            submission_id="s",
+            bounty_id="b",
+            contract_id="c",
+            contract_version="1",
+            work_result_id="w",
+            execution_id="e",
+            output_canonical_hash="a" * 64,
+            review_policy_hash="b" * 64,
+            criteria_results=(),
+            overall_decision=ReviewDecision.ACCEPT,
+            reason_codes=(),
+            evaluator_version="02c-1",
+            evaluated_at=1.0,
+            evaluation_hash="c" * 64,
+        )
+        review = {
+            "review_kind": "deterministic",
+            "evaluation_hash": "c" * 64,
+            "evaluator_version": "02c-1",
+            "decision": "accept",
+            "reason_codes": [],
+            "criteria_results": [],
+            "reviewed_at": float("nan"),
+        }
+        assert math.isnan(review["reviewed_at"])
+        assert not br._is_matching_deterministic_review(review, evaluation)
+
+    def test_inf_reviewed_at_rejected_by_matcher(self):
+        """_is_matching_deterministic_review rejects +Inf reviewed_at."""
+        from village.final_evaluation import FinalEvaluation, ReviewDecision
+
+        evaluation = FinalEvaluation(
+            submission_id="s",
+            bounty_id="b",
+            contract_id="c",
+            contract_version="1",
+            work_result_id="w",
+            execution_id="e",
+            output_canonical_hash="a" * 64,
+            review_policy_hash="b" * 64,
+            criteria_results=(),
+            overall_decision=ReviewDecision.ACCEPT,
+            reason_codes=(),
+            evaluator_version="02c-1",
+            evaluated_at=1.0,
+            evaluation_hash="c" * 64,
+        )
+        review = {
+            "review_kind": "deterministic",
+            "evaluation_hash": "c" * 64,
+            "evaluator_version": "02c-1",
+            "decision": "accept",
+            "reason_codes": [],
+            "criteria_results": [],
+            "reviewed_at": float("inf"),
+        }
+        assert not br._is_matching_deterministic_review(review, evaluation)
+
+    def test_bool_reviewed_at_fails_closed(self, monkeypatch, tmp_path):
+        sub, evaluation = _submit_and_evaluate(monkeypatch, tmp_path)
+        br._write_journal_decided(evaluation)
+        review = br._build_automatic_review_record(evaluation)
+        review["reviewed_at"] = True
+        br._attach_review(sub["submission_id"], review)
+
+        result = br.bounty_review(evaluation)
+        assert result is None
+        journal = hb._load(br.FINALIZATION_JOURNAL)
+        assert journal[br._journal_key(sub["submission_id"])]["stage"] == "failed_closed"
+
 
 # ── AST authority boundaries ───────────────────────────────────
 

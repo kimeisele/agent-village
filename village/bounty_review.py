@@ -358,18 +358,53 @@ def _journal_fail_closed(submission_id: str, reason: str = "") -> None:
     _atomic_save_json(FINALIZATION_JOURNAL, journal)
 
 
+# ── Timestamp validation ──────────────────────────────────────────────────
+
+
+def _is_finite_timestamp(value: Any) -> bool:
+    """Return True if *value* is a finite, non-negative, non-boolean numeric timestamp."""
+    if not isinstance(value, (int, float)):
+        return False
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, float):
+        import math
+
+        if math.isnan(value) or math.isinf(value):
+            return False
+    return value >= 0
+
+
 # ── Review matching ───────────────────────────────────────────────────────
+
+_REVIEW_CANONICAL_FIELDS = frozenset(
+    {
+        "review_kind",
+        "evaluation_hash",
+        "evaluator_version",
+        "decision",
+        "reason_codes",
+        "criteria_results",
+        "reviewed_at",
+    }
+)
+_CRITERION_RESULT_FIELDS = frozenset({"criterion_id", "result", "reason_code"})
 
 
 def _is_matching_deterministic_review(review: dict[str, Any], evaluation: FinalEvaluation) -> bool:
     """Exact canonical field set and value comparison.
 
-    Required fields: review_kind, evaluation_hash, evaluator_version,
+    Required top-level fields: review_kind, evaluation_hash, evaluator_version,
     decision, reason_codes, criteria_results, reviewed_at.
 
-    Rejects missing fields, unexpected semantic fields, NaN, +Inf, -Inf.
+    Each criterion-result entry must have exactly: criterion_id, result, reason_code.
+
+    Rejects extra fields, missing fields, NaN, +Inf, -Inf, booleans, negative values.
     """
     if not isinstance(review, dict):
+        return False
+    # Enforce exact top-level field set
+    if set(review.keys()) != _REVIEW_CANONICAL_FIELDS:
         return False
     if review.get("review_kind") != "deterministic":
         return False
@@ -395,6 +430,8 @@ def _is_matching_deterministic_review(review: dict[str, Any], evaluation: FinalE
     for s, e in zip(cr_stored, cr_eval):
         if not isinstance(s, dict):
             return False
+        if set(s.keys()) != _CRITERION_RESULT_FIELDS:
+            return False
         if (
             s.get("criterion_id") != e["criterion_id"]
             or s.get("result") != e["result"]
@@ -402,15 +439,8 @@ def _is_matching_deterministic_review(review: dict[str, Any], evaluation: FinalE
         ):
             return False
     ra = review.get("reviewed_at")
-    if not isinstance(ra, (int, float)):
+    if not _is_finite_timestamp(ra):
         return False
-    if isinstance(ra, bool):
-        return False
-    if isinstance(ra, float):
-        import math
-
-        if math.isnan(ra) or math.isinf(ra):
-            return False
     return True
 
 
@@ -469,6 +499,7 @@ def _criteria_match(contract: VillageContract, evaluation: FinalEvaluation) -> b
 # ── Contract evaluation history ───────────────────────────────────────────
 
 _AUTO_EVALS_KEY = "auto_evaluations"
+_AUTO_EVAL_ENTRY_FIELDS = frozenset({"submission_id", "evaluation_hash", "decision", "evaluator_version"})
 
 
 def _get_eval_history(contract: VillageContract) -> dict[str, dict[str, Any]]:
@@ -500,6 +531,8 @@ def _record_eval_history(contract: VillageContract, evaluation: FinalEvaluation)
         hist[sid] = entry
         contract.extra[_AUTO_EVALS_KEY] = hist
         return "recorded"
+    if not isinstance(existing, dict) or set(existing.keys()) != _AUTO_EVAL_ENTRY_FIELDS:
+        return "conflict"
     if (
         existing.get("evaluation_hash") == entry["evaluation_hash"]
         and existing.get("decision") == entry["decision"]
@@ -516,14 +549,24 @@ def _eval_history_has_submission(contract: VillageContract, submission_id: str) 
 
 
 def _eval_history_matches(contract: VillageContract, evaluation: FinalEvaluation) -> bool:
-    """Check that the evaluation history contains an exact match for this evaluation."""
+    """Check that the evaluation history contains an exact match for this evaluation.
+
+    Requires all four canonical fields: submission_id, evaluation_hash,
+    decision, evaluator_version.  The entry must have exactly those fields.
+    """
     hist = _get_eval_history(contract)
     entry = hist.get(evaluation.submission_id)
     if entry is None:
         return False
+    if not isinstance(entry, dict):
+        return False
+    if set(entry.keys()) != _AUTO_EVAL_ENTRY_FIELDS:
+        return False
     return (
-        entry.get("evaluation_hash") == evaluation.evaluation_hash
+        entry.get("submission_id") == evaluation.submission_id
+        and entry.get("evaluation_hash") == evaluation.evaluation_hash
         and entry.get("decision") == evaluation.overall_decision.value
+        and entry.get("evaluator_version") == evaluation.evaluator_version
     )
 
 
@@ -597,9 +640,10 @@ def _verify_complete_projections(
         return False
     # Timestamp sanity
     if evaluation.overall_decision == ReviewDecision.ACCEPT:
-        completed_at = bounty.get("completed_at")
-        if not isinstance(completed_at, (int, float)) or isinstance(completed_at, bool):
+        if not _is_finite_timestamp(bounty.get("completed_at")):
             return False
+    if not _is_finite_timestamp(review.get("reviewed_at")):
+        return False
     return True
 
 
@@ -692,14 +736,9 @@ def _bounty_review_automatic(evaluation: FinalEvaluation) -> dict[str, Any] | No
             return None
 
     # Contract projection
-    hist_result = _record_eval_history(contract, evaluation)
-    if hist_result == "conflict":
-        _journal_fail_closed(evaluation.submission_id, "eval_history_conflict")
-        return None
-
     if evaluation.overall_decision == ReviewDecision.ACCEPT:
         if contract.state == ContractState.FULFILLED:
-            # Already fulfilled — verify
+            # Already fulfilled — verify. Never create a missing history entry.
             if not _eval_history_matches(contract, evaluation):
                 _journal_fail_closed(evaluation.submission_id, "contract_fulfilled_different_eval")
                 return None
@@ -707,6 +746,10 @@ def _bounty_review_automatic(evaluation: FinalEvaluation) -> dict[str, Any] | No
                 _journal_fail_closed(evaluation.submission_id, "contract_criteria_mismatch")
                 return None
         elif contract.state == ContractState.ACTIVE:
+            hist_result = _record_eval_history(contract, evaluation)
+            if hist_result == "conflict":
+                _journal_fail_closed(evaluation.submission_id, "eval_history_conflict")
+                return None
             if not _criteria_match(contract, evaluation):
                 _apply_criteria_results(contract, evaluation)
             try:
@@ -725,15 +768,16 @@ def _bounty_review_automatic(evaluation: FinalEvaluation) -> dict[str, Any] | No
         if contract.state != ContractState.ACTIVE:
             _journal_fail_closed(evaluation.submission_id, "contract_not_active_for_reject")
             return None
+        hist_result = _record_eval_history(contract, evaluation)
+        if hist_result == "conflict":
+            _journal_fail_closed(evaluation.submission_id, "eval_history_conflict")
+            return None
         if not _criteria_match(contract, evaluation):
             _apply_criteria_results(contract, evaluation)
-            _atomic_save_json(
-                heartbeat.CONTRACTS,
-                _load_contract_store_for_save(contract),
-            )
-        else:
-            # Criteria already match — still need to persist eval history
-            _save_contract(contract)
+        _atomic_save_json(
+            heartbeat.CONTRACTS,
+            _load_contract_store_for_save(contract),
+        )
 
     # Bounty projection
     if evaluation.overall_decision == ReviewDecision.ACCEPT:
