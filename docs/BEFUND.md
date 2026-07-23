@@ -2479,7 +2479,7 @@ Bounty-Lifecycle auf. `_bounty_review_automatic` wird nirgendwo außerhalb von
 `bounty_review()` aufgerufen. `final_evaluation.py` bleibt rein (keine Heartbeat-
 oder Bounty-Review-Importe). AST-Tests in `test_bounty_review_automatic.py`.
 
-**Tests:** 30 in `test_bounty_review_automatic.py`:
+**Tests:** 40 in `test_bounty_review_automatic.py`:
 - Happy path: ACCEPT, REJECT, INDETERMINATE rejection (3)
 - Idempotency: duplicate ACCEPT/REJECT preserves reviewed_at + completed_at (2)
 - Conflict: different hash for completed submission (1)
@@ -2488,7 +2488,10 @@ oder Bounty-Review-Importe). AST-Tests in `test_bounty_review_automatic.py`.
 - Public-boundary interruption: 4 ACCEPT + 4 REJECT Grenzen (8)
 - Failure modes: conflicting review, fulfilled-under-other-eval, REJECT against
   fulfilled, bounty done for other submission, no-journal, torn temp file,
-  contract contradiction after complete, bounty contradiction after complete (8)
+  contract contradiction after complete, bounty contradiction after complete,
+  REJECT criteria-match interrupt, fulfilled no-history, fulfilled wrong
+  evaluator version, extra/missing review fields (14)
+- Timestamp validation: negative/bool reviewed_at, NaN/Inf matcher reject (4)
 - AST authority boundaries (5)
 
-Suite: 479/479. mypy grün (20 files), ruff grün, ruff format grün.
+Suite: 489/489. mypy grün (20 files), ruff grün, ruff format grün.
