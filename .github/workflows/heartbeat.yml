@@ -52,9 +52,8 @@ jobs:
         # as of this slice (verified via `gh api
         # repos/kimeisele/steward-federation/commits?path=nadi_kit.py`).
         # Bump deliberately, not silently, when a new nadi_kit.py version
-        # is needed. Fetched from the immutable history archive
-        # (steward-federation-history), whose main is read-only and
-        # branch-protected.
+        # is needed. Fetched from the immutable v0.1.2 tag in the live
+        # steward-federation repo.
         run: |
           curl -sL -H "Authorization: token ${GH_TOKEN}" \
             "https://raw.githubusercontent.com/kimeisele/steward-federation/v0.1.2/nadi_kit.py" \
