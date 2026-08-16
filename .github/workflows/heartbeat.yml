@@ -57,7 +57,7 @@ jobs:
         # branch-protected.
         run: |
           curl -sL -H "Authorization: token ${GH_TOKEN}" \
-            "https://raw.githubusercontent.com/kimeisele/steward-federation-history/e1321e575b8b56ab624e4e5c2edd735213c895f5/nadi_kit.py" \
+            "https://raw.githubusercontent.com/kimeisele/steward-federation/v0.1.2/nadi_kit.py" \
             -o nadi_kit.py
           python3 -c "import sys; sys.path.insert(0, '.'); import nadi_kit; print('nadi_kit loaded')"
 
